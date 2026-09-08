@@ -1,0 +1,68 @@
+version: "3.9"
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: turkish-db
+    restart: unless-stopped
+    command:
+      # NullPool arxitekturasi: har sessiya alohida connection.
+      # 100 user × 2 session + 50 upload + 5 report + 10 zahira = ~165.
+      # max_connections=300 — yetarli zahira bilan.
+      - "postgres"
+      - "-c"
+      - "max_connections=300"
+      # TCP keepalive — uzun querylar da connection uzilmasligi uchun
+      - "-c"
+      - "tcp_keepalives_idle=60"
+      - "-c"
+      - "tcp_keepalives_interval=10"
+      - "-c"
+      - "tcp_keepalives_count=6"
+      # Statement timeout — 5 daqiqa dan uzoq querylarni to'xtatish
+      - "-c"
+      - "statement_timeout=300000"
+      # Idle session timeout — 10 daqiqa bo'sh sessionlarni yopish
+      - "-c"
+      - "idle_in_transaction_session_timeout=60000"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-postgres}"
+      POSTGRES_DB: "${POSTGRES_DB:-turkish}"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  bot:
+    build: .
+    container_name: turkish-speaking-bot
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+
+    env_file:
+      - .env
+
+    environment:
+      # Konteynerlardan Postgres servis nomi orqali ulanish.
+      # .env dagi DATABASE_URL localhost'ga qarasa, buni berganda
+      # konteyner ichida `db` servisiga yo'naltiriladi.
+      DATABASE_URL: "postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-turkish}"
+
+    volumes:
+      - ./data:/app/data
+      - ./.env:/app/.env:ro
+
+    ports:
+      - "8000:8000"
+
+    # Agar faqat bot kerak bo'lsa (FastAPIsiz):
+    # command: python -m app.bot.bot
+
+volumes:
+  pgdata:
