@@ -156,6 +156,39 @@ async def daily_limit_reset_task():
             logger.error(f"❌ Limit qaytarishda xato: {e}")
 
 
+async def daily_export_wipe_task():
+    """Har kuni 00:00 da .docx hisobotni adminlarga yuborib, bazani
+    TO'LIQ tozalaydi (users, attempts, answers, questions, test_settings,
+    audio fayllar — 0 qoldirmaydi).
+
+    Xavfsizlik: wipe faqat adminlarning kamida bittasi hisobot faylini
+    olgan taqdirda bajariladi (daily_export_wipe ichida kafolatlangan).
+    """
+    from app.services.daily_export_wipe import run_daily_export_and_wipe
+    from app.utils.helpers import utcnow
+
+    while True:
+        now = utcnow()
+        tomorrow = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        seconds_until_midnight = (tomorrow - now).total_seconds()
+
+        logger.info(
+            f"🗓️ Kunlik eksport+wipe {seconds_until_midnight:.0f} soniyadan "
+            f"so'ng amalga oshadi."
+        )
+
+        await asyncio.sleep(seconds_until_midnight)
+
+        try:
+            result = await run_daily_export_and_wipe()
+            if result is None:
+                logger.error("⚠️ Kunlik eksport+wipe bajarilmadi (fayl adminlarga yuborilmagan bo'lishi mumkin).")
+            else:
+                logger.info("✅ Kunlik eksport+wipe tugallandi: %s", result)
+        except Exception as e:
+            logger.exception("❌ Kunlik eksport+wipe xato: %s", e)
+
+
 # ──────────────────────────────────────────
 # VITE FRONTEND (subprocess ichida)
 # ──────────────────────────────────────────
@@ -222,7 +255,13 @@ async def main():
     # 3. Report workerlarni ishga tushirish (bitta loopda — pool safe)
     start_report_workers()
 
-    # 4. Vite frontendni ishga tushirish
+    # 4. Kunlik fon vazifalari (har kuni 00:00):
+    #    - limitni kunlik rejimga qaytarish
+    #    - .docx hisobot yuborish va bazani to'liq tozalash
+    asyncio.create_task(daily_limit_reset_task())
+    asyncio.create_task(daily_export_wipe_task())
+
+    # 5. Vite frontendni ishga tushirish
     logger.info("🌐 Frontend (Vite) ishga tushmoqda...")
     start_vite()
 

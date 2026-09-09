@@ -5,8 +5,7 @@ from typing import Any
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database.models import Answer, TestAttempt, User
-from app.services.user_scope import _USER_SELECTION
+from app.database.models import Answer, Question, TestAttempt, TestSettings, User
 from app.utils.helpers import utcnow
 
 logger = logging.getLogger(__name__)
@@ -26,98 +25,84 @@ def _delete_files(paths: list[str]) -> int:
     return deleted
 
 
-async def _scoped_user_ids(session: AsyncSession) -> list[int]:
-    """O'chiriladigan foydalanuvchi IDlari.
-
-    Eksport hisoboti va tozalash (wipe) orasida YAGONA mezon ishlatiladi:
-    `_USER_SELECTION()` — `is_admin=False` va `is_registered=True`.
-    Shuning uchun adminlar va ro'yxatdan o'tmagan foydalanuvchilar wipe'dan
-    chetda qoladi. `questions` va `test_settings` SAQLANADI.
-    """
-    result = await session.execute(select(User.id).where(_USER_SELECTION()))
-    return list(result.scalars().all())
-
-
-async def _scoped_attempt_ids(session: AsyncSession, user_ids: list[int]) -> list[int]:
-    """Berilgan foydalanuvchilarga tegishli attempt IDlari."""
-    result = await session.execute(
-        select(TestAttempt.id).where(TestAttempt.user_id.in_(user_ids))
-    )
-    return list(result.scalars().all())
-
-
 async def count_rows(session: AsyncSession) -> dict[str, int]:
     """Tozalash (wipe) amalga oshsa qancha qator o'chishini ko'rsatadigan
     hisobot. HECH NARSA O'CHIRMAYDI — faqat sanaydi."""
-    user_ids = await _scoped_user_ids(session)
-    attempt_ids = await _scoped_attempt_ids(session, user_ids) if user_ids else []
-
-    answers = 0
-    if attempt_ids:
-        answers = (
-            await session.execute(
-                select(func.count(Answer.id)).where(Answer.attempt_id.in_(attempt_ids))
-            )
+    async def _count(model) -> int:
+        return (
+            await session.execute(select(func.count()).select_from(model))
         ).scalar_one()
 
+    answers = await _count(Answer)
+    attempts = await _count(TestAttempt)
     return {
-        "users": len(user_ids),
-        "attempts": len(attempt_ids),
-        "answers": int(answers),
+        "users": await _count(User),
+        "attempts": attempts,
+        "answers": answers,
+        "questions": await _count(Question),
+        "test_settings": await _count(TestSettings),
     }
 
 
 async def wipe_user_data(session: AsyncSession) -> dict[str, Any]:
-    """BARCHA foydalanuvchilarni (admin va unregistered ham), ularning test
-    attemptlari va javoblarini o'chiradi.
+    """BAZA TO'LIQ TOZALAYDI — 0 QOLDIRMAYDIGAN WIPE.
 
-    `questions` va `test_settings` SAQLANADI.
+    Barcha jadvallar bo'shatiladi:
+      - users, test_attempts, answers (foydalanuvchi va test ma'lumoti)
+      - questions (savol bazasi — admin yangilarini yuklaydi)
+      - test_settings (test holati/is_active/invite_token)
+    Qo'shimcha: barcha audio fayllar ham o'chiriladi.
 
-    Qaytaradi: {users, attempts, answers, audio_files, at} — o'chirilgan
-    amallar soni hisoboti.
+    BU TOZALASHDAN OLDIN .docx EKSPORT QILINIShI SHART (daily_export_wipe
+    kafolatlaydi: kamida bitta admin faylni olmasa wipe bajarilmaydi).
+
+    Qaytaradi: {users, attempts, answers, questions, test_settings,
+    audio_files, at} — o'chirilgan amallar soni hisoboti.
     """
-    user_ids = await _scoped_user_ids(session)
     result = {
-        "users": len(user_ids),
+        "users": 0,
         "attempts": 0,
         "answers": 0,
+        "questions": 0,
+        "test_settings": 0,
         "audio_files": 0,
         "at": utcnow(),
     }
 
-    if not user_ids:
-        logger.info("Wipe: o'chiriladigan foydalanuvchi topilmadi")
-        return result
-
-    attempt_ids = await _scoped_attempt_ids(session, user_ids)
-    result["attempts"] = len(attempt_ids)
-
     # Javoblarni o'chirishdan AVVAL audio fayllar yo'llarini yig'ib olamiz.
-    audio_paths: list[str] = []
-    if attempt_ids:
-        audio_res = await session.execute(
-            select(Answer.audio_path).where(Answer.attempt_id.in_(attempt_ids))
-        )
-        audio_paths = [p for (p,) in audio_res.all() if p]
+    audio_res = await session.execute(select(Answer.audio_path))
+    audio_paths = [p for (p,) in audio_res.all() if p]
 
-        answers = (
-            await session.execute(
-                select(func.count(Answer.id)).where(Answer.attempt_id.in_(attempt_ids))
-            )
-        ).scalar_one()
-        result["answers"] = int(answers)
+    result["users"] = (
+        await session.execute(select(func.count()).select_from(User))
+    ).scalar_one()
+    result["attempts"] = (
+        await session.execute(select(func.count()).select_from(TestAttempt))
+    ).scalar_one()
+    result["answers"] = (
+        await session.execute(select(func.count()).select_from(Answer))
+    ).scalar_one()
+    result["questions"] = (
+        await session.execute(select(func.count()).select_from(Question))
+    ).scalar_one()
+    result["test_settings"] = (
+        await session.execute(select(func.count()).select_from(TestSettings))
+    ).scalar_one()
 
-    # Bog'lanish tartibi bo'yicha o'chirish: answers -> attempts -> users.
-    if attempt_ids:
-        await session.execute(delete(Answer).where(Answer.attempt_id.in_(attempt_ids)))
-    await session.execute(delete(TestAttempt).where(TestAttempt.user_id.in_(user_ids)))
-    await session.execute(delete(User).where(User.id.in_(user_ids)))
+    # Bog'liqliklar bo'yicha o'chirish tartibi.
+    await session.execute(delete(Answer))
+    await session.execute(delete(TestAttempt))
+    await session.execute(delete(User))
+    await session.execute(delete(Question))
+    await session.execute(delete(TestSettings))
 
     await session.commit()
 
     result["audio_files"] = _delete_files(audio_paths)
     logger.info(
-        "Wipe tugallandi: %s user, %s attempt, %s answer, %s audio fayl",
-        result["users"], result["attempts"], result["answers"], result["audio_files"],
+        "Wipe tugallandi: %s user, %s attempt, %s answer, %s question, "
+        "%s test_settings, %s audio fayl",
+        result["users"], result["attempts"], result["answers"],
+        result["questions"], result["test_settings"], result["audio_files"],
     )
     return result

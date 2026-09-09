@@ -57,10 +57,11 @@ async def _notify_admins_text(text: str) -> None:
 async def run_daily_export_and_wipe() -> dict | None:
     """Har kuni 00:00 da chaqiriladi.
 
-    1. Foydalanuvchilar natijalarini .docx hisobotga eksport qiladi.
+    1. BARCHA foydalanuvchilar va test natijalarini .docx hisobotga eksport qiladi.
     2. Adminlarning KAMIDA BITTASIGA muvaffaqiyatli yuborilishi sharti bilan
        (admin_id_list bo'sh bo'lmasa va kamida 1 ta yuborilsa) bazani
-       `wipe_user_data` orqali tozalaydi.
+       `wipe_user_data` orqali TO'LIQ tozalaydi (users, attempts, answers,
+       questions, test_settings, audio fayllar — 0 qoldirmaydi).
     3. Tozalash muvaffaqiyatli bo'lsa — yuborilgan faylni o'chiradi.
        Tozalash muvaffaqiyatsiz bo'lsa — fayl saqlanib qoladi (zaxira nusxa).
 
@@ -113,8 +114,9 @@ async def run_daily_export_and_wipe() -> dict | None:
                 logger.warning("Hisobot fayli o'chirilmadi: %s", report_path)
 
             await _notify_admins_text(
-                "✅ Kunlik hisobot yuborildi va baza tozalandi "
+                "✅ Kunlik hisobot yuborildi va baza to'liq tozalandi "
                 "(users={users}, attempts={attempts}, answers={answers}, "
+                "questions={questions}, test_settings={test_settings}, "
                 "audio={audio_files}).".format(**wiped)
             )
             return wiped

@@ -10,7 +10,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.models import TestAttempt, User
-from app.services.user_scope import _USER_SELECTION
 from app.utils.helpers import format_filename, utcnow
 
 logger = logging.getLogger(__name__)
@@ -22,30 +21,24 @@ REPORTS_DIR = Path(__file__).resolve().parents[2] / "data" / "reports"
 async def collect_users_with_results(
     session: AsyncSession,
 ) -> list[dict[str, Any]]:
-    """`_USER_SELECTION` mezoni (is_admin=False va is_registered=True) ga
-    mos keladigan barcha foydalanuvchilarni hamda ularning eng so'nggi
-    test natijalarini (ball, daraja) yig'adi. Hisobotga faqat kamida
-    bitta attempti bo'lganlar kiradi; hali test topshirmaganlar qator
-    sifatida tushmaydi (lekin baribir `_USER_SELECTION` mezoni bo'yicha
-    hisobga olinadi).
+    """BARCHA foydalanuvchilar (adminlar ham) va ularning barcha test
+    attemptlarini to'liq ma'lumot bilan yig'adi.
+
+    Wipe (to'liq tozalash) oldidan YAGONA ma'lumot manbai — .docx hisobot.
+    Shuning uchun hech narsa filtirlanmaydi: har bir attempt alohida qator
+    bo'ladi, test topshirmagan userlar ham "test topshirmagan" holatida
+    kiradi (ularning to'liq ma'lumoti yo'qolmasligi uchun).
     """
-    result = await session.execute(
-        select(User).where(_USER_SELECTION())
-    )
+    result = await session.execute(select(User).order_by(User.id))
     users = list(result.scalars().all())
 
-    # Foydalanuvchi IDlarini yig'ib, ularning barcha attemptlarini olamiz.
-    # Masshtab kichik (~yuzlab foydalanuvchi), shuning uchun hammasini
-    # bitta so'rovda olib, Python'da guruhlash amaliy.
     rows: list[dict[str, Any]] = []
     if not users:
         return rows
 
-    # Hisobotga faqat natijasi (attempti) bo'lganlar kiradi.
-
     user_ids = [u.id for u in users]
     att_result = await session.execute(
-        select(TestAttempt).where(TestAttempt.user_id.in_(user_ids))
+        select(TestAttempt).where(TestAttempt.user_id.in_(user_ids)).order_by(TestAttempt.id)
     )
     attempts = list(att_result.scalars().all())
 
@@ -56,20 +49,44 @@ async def collect_users_with_results(
     for user in users:
         user_attempts = attempts_by_user.get(user.id, [])
         if not user_attempts:
+            rows.append(
+                {
+                    "telegram_id": user.telegram_id,
+                    "full_name": user.full_name or "*",
+                    "username": user.username or "*",
+                    "phone": user.phone or "*",
+                    "created_at": user.created_at,
+                    "status": "test topshirmagan",
+                    "started_at": None,
+                    "finished_at": None,
+                    "score": None,
+                    "level": None,
+                }
+            )
             continue
-        # Eng so'nggi attempt — `started_at` bo'yicha eng kattasi.
-        latest = max(user_attempts, key=lambda a: (a.started_at or utcnow()))
-        rows.append(
-            {
-                "full_name": user.full_name or user.username or str(user.telegram_id),
-                "score": latest.score,
-                "level": latest.level,
-            }
-        )
+        for attempt in user_attempts:
+            rows.append(
+                {
+                    "telegram_id": user.telegram_id,
+                    "full_name": user.full_name or "*",
+                    "username": user.username or "*",
+                    "phone": user.phone or "*",
+                    "created_at": user.created_at,
+                    "status": attempt.status,
+                    "started_at": attempt.started_at,
+                    "finished_at": attempt.finished_at,
+                    "score": attempt.score,
+                    "level": attempt.level,
+                }
+            )
 
     # Ism bo'yicha tartiblash (naklonistik, lekin amaliy jihatdan yetarli).
     rows.sort(key=lambda r: (r["full_name"] or "").lower())
     return rows
+
+
+def _fmt_dt(value) -> str:
+    return value.strftime("%Y-%m-%d %H:%M") if value else "*"
 
 
 def _style_header_cell(cell) -> None:
@@ -108,12 +125,15 @@ def build_report_docx(
         f"Jami: {len(rows)} ta foydalanuvchi natijasi"
     ).font.bold = True
 
-    table = doc.add_table(rows=1, cols=4)
+    table = doc.add_table(rows=1, cols=11)
     table.style = "Table Grid"
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
 
     header = table.rows[0].cells
-    headers = ["#", "Ism Familiya", "Umumiy ball", "Daraja"]
+    headers = [
+        "#", "Telegram ID", "Ism Familiya", "Username", "Telefon",
+        "Ro'yxat sanasi", "Holat", "Boshlangan", "Yakunlangan", "Ball", "Daraja",
+    ]
     for i, text in enumerate(headers):
         header[i].text = text
         _style_header_cell(header[i])
@@ -121,9 +141,16 @@ def build_report_docx(
     for idx, row in enumerate(rows, start=1):
         cells = table.add_row().cells
         cells[0].text = str(idx)
-        cells[1].text = row["full_name"] or "—"
-        cells[2].text = str(row["score"]) if row["score"] is not None else "—"
-        cells[3].text = row["level"] or "—"
+        cells[1].text = str(row["telegram_id"])
+        cells[2].text = row["full_name"] or "—"
+        cells[3].text = row["username"] or "—"
+        cells[4].text = row["phone"] or "—"
+        cells[5].text = _fmt_dt(row["created_at"])
+        cells[6].text = row["status"] or "—"
+        cells[7].text = _fmt_dt(row["started_at"])
+        cells[8].text = _fmt_dt(row["finished_at"])
+        cells[9].text = str(row["score"]) if row["score"] is not None else "—"
+        cells[10].text = row["level"] or "—"
 
     doc.save(str(file_path))
     logger.info("Hisobot fayli saqlandi: %s (%s qator)", file_path, len(rows))

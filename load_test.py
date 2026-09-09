@@ -78,19 +78,41 @@ async def _reset_test_db() -> None:
             f"Xavfsizlik: LOAD_TEST_DATABASE_URL test bazasiga ishora "
             f"qilmayapti (database='{name}'). '_test' bilan tugashi shart."
         )
+
+    # Jadvallar mavjud bo'lishini ta'minlaydi (yangi/buzilgan baza holati uchun)
+    await _ensure_tables()
+
     conn = await asyncpg.connect(TEST_DB_SYNC_URL)
     try:
         await conn.execute(
             "TRUNCATE answers, test_attempts, users, questions "
             "RESTART IDENTITY CASCADE"
         )
-    except Exception:
-        await conn.execute("DROP TABLE IF EXISTS answers CASCADE")
-        await conn.execute("DROP TABLE IF EXISTS test_attempts CASCADE")
-        await conn.execute("DROP TABLE IF EXISTS questions CASCADE")
-        await conn.execute("DROP TABLE IF EXISTS users CASCADE")
     finally:
         await conn.close()
+
+
+async def _ensure_tables() -> None:
+    """Test bazasida jadvallarni idempotent yaratadi (init_db ga o'xshash)."""
+    from sqlalchemy import text as _text
+    from sqlalchemy.ext.asyncio import create_async_engine as _make_engine
+
+    from app.database.database import Base, _MIGRATIONS
+
+    # Model'larni Base.metadata'ga ro'yxatdan o'tkazish majburiy.
+    from app.database import models  # noqa: F401
+
+    engine_test = _make_engine(TEST_DB_URL)
+    try:
+        async with engine_test.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+            for statement in _MIGRATIONS:
+                try:
+                    await connection.execute(_text(statement))
+                except Exception:
+                    pass
+    finally:
+        await engine_test.dispose()
 
 
 async def _insert_question() -> int:
@@ -120,8 +142,8 @@ async def _seed_registered_users(n_users: int) -> None:
             for i in range(n_users)
         ]
         await conn.executemany(
-            "INSERT INTO users (telegram_id, is_registered, created_at) "
-            "VALUES ($1, $2, now()) ON CONFLICT (telegram_id) DO NOTHING",
+            "INSERT INTO users (telegram_id, is_admin, is_registered, created_at) "
+            "VALUES ($1, FALSE, $2, now()) ON CONFLICT (telegram_id) DO NOTHING",
             rows,
         )
     finally:
@@ -244,7 +266,13 @@ async def main() -> None:
             create_out = await asyncio.gather(*(create_one(d) for d in init_datas))
             create_duration = time.perf_counter() - t0
             create_results = [c for c, _ in create_out]
-            attempt_ids = [a for _, a in create_out if a is not None]
+
+            # Har bir attempt uchun tegishli user'ning init_data si (auth uchun)
+            attempt_to_init = {}
+            for d, (_, aid) in zip(init_datas, create_out):
+                if aid is not None:
+                    attempt_to_init[aid] = d
+            attempt_ids = list(attempt_to_init)
 
             _print_report(f"create_attempt ({n_users} parallel)", create_results, create_duration)
 
@@ -256,7 +284,9 @@ async def main() -> None:
                 t0 = time.perf_counter()
                 try:
                     r = await client.post(
-                        f"/api/attempts/{aid}/answers/{qid}", files=files
+                        f"/api/attempts/{aid}/answers/{qid}",
+                        data={"init_data": attempt_to_init[aid]},
+                        files=files,
                     )
                     ms = (time.perf_counter() - t0) * 1000
                     return (r.status_code, None, ms)
