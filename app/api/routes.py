@@ -61,7 +61,9 @@ async def _send_telegram(telegram_id: int, text: str) -> None:
 async def questions() -> list[dict]:
     async with SessionLocal() as session:
         result = await session.execute(
-            select(Question).order_by(
+            select(Question)
+            .where(Question.is_active.is_(True))
+            .order_by(
                 Question.section,
                 Question.order_number,
             ),
@@ -80,6 +82,7 @@ async def questions() -> list[dict]:
                 "pro_points": item.pro_points,
                 "con_points": item.con_points,
                 "max_points": item.max_points,
+                "is_active": item.is_active,
             }
             for item in items
         ]
@@ -195,6 +198,20 @@ async def create_attempt(
             session.add(db_user)
             await session.commit()
             await session.refresh(db_user)
+
+        # SECURITY: Ro'yxatdan o'tmagan foydalanuvchilar testga kirishlari
+        # taqiqlanadi. Bot flow'ida har bir foydalanuvchi taklif havolasi
+        # orqali ro'yxatdan o'tgan (start.py) — shuning uchun bu yerda
+        # ro'yxatdan o'tmaganlarga ruxsat berish bot cheklovini chetlab
+        # o'tish (bypass) bo'lar edi.
+        if not db_user.is_admin and not db_user.is_registered:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "message": "Testni boshlash uchun avval bot orqali ro'yxatdan o'ting.",
+                    "limit_reached": False,
+                },
+            )
 
         # Tekshir: mavjud attempt bormi?
         existing = (
@@ -865,10 +882,22 @@ async def serve_audio(filename: str, init_data: str = Query(...)):
 
     SECURITY: StaticFiles olib tashlangan — user audio fayllari
     endi faqat Telegram imzo tekshirilgandan keyin ochiladi.
+    Path traversal himoyasi: .., //, absolute path bloklanadi.
     """
     user_id = get_telegram_user_id(init_data)
 
+    # SECURITY: Path traversal himoyasi
+    if ".." in filename or "//" in filename:
+        raise HTTPException(status_code=403, detail="Noto'g'ri audio yo'li")
+
     audio_path = Path(settings.upload_dir) / filename
+    audio_path = audio_path.resolve()  # Normalize qilish
+
+    # SECURITY: Fayl upload_dir ichida ekanligini tekshirish
+    upload_dir_resolved = Path(settings.upload_dir).resolve()
+    if not str(audio_path).startswith(str(upload_dir_resolved)):
+        raise HTTPException(status_code=403, detail="Noto'g'ri audio yo'li")
+
     if not audio_path.exists():
         raise HTTPException(status_code=404, detail="Audio topilmadi")
 

@@ -13,6 +13,7 @@ import json
 import logging
 import re
 from pathlib import Path
+from types import SimpleNamespace
 
 from sqlalchemy import select
 
@@ -317,6 +318,20 @@ async def _send_report(
     Bitta failed message butun queue'ni bloklamaydi.
     """
     from app.services.telegram_sender import telegram_sender
+
+    # BUG FIX: `answers` `_process_attempt_and_report_inner`'dan `ordered`
+    # sifatida keladi — bu ORM `Answer` obyektlari emas, oddiy dict'lar
+    # ro'yxati (answers_data qurilishiga qarang). Pastdagi `_answer_text`
+    # va shu funksiya `answer.transcript`, `answer.audio_path` kabi NUQTA
+    # orqali murojaat qiladi — dict ustida bu har doim AttributeError
+    # berardi va try/except ichida yutilib, foydalanuvchiga hech qanday
+    # audio/transkript/xato tahlili yuborilmas edi (faqat header+summary).
+    # Shu yerda dict'larni atributga ega obyektga o'giramiz — ORM
+    # obyekt yoki test uchun FakeAnswer kelsa ham ta'sir qilmaydi.
+    answers = [
+        SimpleNamespace(**a) if isinstance(a, dict) else a
+        for a in answers
+    ]
 
     # Duplicate himoya
     if attempt_id is not None:

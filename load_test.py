@@ -106,6 +106,28 @@ async def _insert_question() -> int:
         await conn.close()
 
 
+async def _seed_registered_users(n_users: int) -> None:
+    """Yuklama sinovi userlarini ro'yxatdan o'tgan deb belgilaydi.
+
+    SECURITY (routes.py): /api/attempts endi ro'yxatdan o'tmagan userlarni
+    403 bilan rad etadi. Load test real foydalanuvchi oqimini simulyatsiya
+    qilishi uchun test userlarini is_registered=True qilib yozamiz.
+    """
+    conn = await asyncpg.connect(TEST_DB_SYNC_URL)
+    try:
+        rows = [
+            (20000 + i, True)
+            for i in range(n_users)
+        ]
+        await conn.executemany(
+            "INSERT INTO users (telegram_id, is_registered, created_at) "
+            "VALUES ($1, $2, now()) ON CONFLICT (telegram_id) DO NOTHING",
+            rows,
+        )
+    finally:
+        await conn.close()
+
+
 async def _db_max_connections() -> int:
     conn = await asyncpg.connect(TEST_DB_SYNC_URL)
     try:
@@ -174,6 +196,7 @@ async def main() -> None:
     print("=" * 66)
 
     await _reset_test_db()
+    await _seed_registered_users(n_users)
 
     env = os.environ.copy()
     env["DATABASE_URL"] = TEST_DB_URL

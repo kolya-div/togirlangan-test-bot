@@ -1,24 +1,19 @@
 """
-Telegram bot-daraja global yuborish rate limiter (token bucket / min-interval).
+Telegram bot-daraja global + per-chat yuborish rate limiter.
 
-Nega: Telegram botlar uchun UMUMIY (barcha chatlar bo'yicha) tezlik chegarasi
-mavjud (~30 xabar/sekund). BIR XIL bot tokenidan yuboriladigan HAMMA xabarlar
-— hisobot xabarlari ham, bot handler'laridagi oddiy suhbat xabarlari ham
-(message.answer, callback.message.answer va h.k.) — o'sha chegaraga tortiladi.
-70-100 foydalanuvchi bir vaqtda testni boshlaganda va/ yoki tugatganda barcha
-yuborishlar birlashib, ular sonini kesib o'tishi mumkin.
+Global: 25 msg/s (Telegram ~30 msg/s limitidan xavfsiz).
+Per-chat: ~1 msg/s per chat (Telegram ichki flood limit).
 
-Ilgari faqat hisobot yo'li (`_send_with_retry`) 429'ga REAKTIV javob berardi.
-Bu modul PROAKTIV global gate beradi: har qanday `aiogram.Bot` `__call__`
-chaqiruvidan (har qanday API method, har qanday Bot instansiyasi, har qanday
-event loop da) o'tadi.
+Ikkinchi cheklov muhim: hisobot 4-5 xabar yuboradi (header + audio +
+text + summary). 50 user bir vaqtda tugasa, har biriga 5 msg
+ketma-ket → bir chat'da 5 msg 5 soniyada → Telegram 429 berishi mumkin.
 
 Muhim arxitektura tanlovi: ikkita event loop (Loop A = bot, Loop B = FastAPI)
 mavjud. Shuning uchun `asyncio.Lock`/`Semaphore` ISHLATA OLMAYMIZ — ular
 loop'ga bog'lanib, boshqa loopdan ishlatilsa "bound to a different event loop"
 xatosi beradi. O'rniga `threading.Lock` + `time.monotonic()` ishlatamiz —
 loop-agnostik va thread-safe. Kutish esa `asyncio.sleep` orqali qo'ng'iroq
-qiluvchining o'z loopida bajariladi.
+chiruvchining o'z loopida bajariladi.
 """
 
 import asyncio
@@ -28,26 +23,28 @@ import time
 
 logger = logging.getLogger(__name__)
 
-# Telegram botlar uchun umumiy chegarasi ~30 msg/sekund. Xavfsizlik zahirasi
-# bilan 25 msg/sekund qilib qo'yamiz — 429 juda kam chiqadi, lekin yetkazish
-# hali ham tez.
+# ────────────── GLOBAL RATE LIMIT ──────────────
 TELEGRAM_RATE_PER_SECOND = 25.0
-
-# Umumiy interval: 1 / tezlik
 _MIN_INTERVAL = 1.0 / TELEGRAM_RATE_PER_SECOND
 
 _lock = threading.Lock()
 _next_allowed_at = 0.0  # time.monotonic() asosida
 
+# ────────────── PER-CHAT RATE LIMIT ──────────────
+# Telegram flood control: ~1 msg/s per chat, ~20 msg/min per group.
+# Hisobot xabarlari sequential — lekin 50+ user bir vaqtda tugasa,
+# interleaving yuz beradi. Per-chat gate 1.5s interval (xavfsiz zahira).
+PER_CHAT_INTERVAL = 1.5  # soniya (har bir chat uchun minimal interval)
+_chat_last_allowed: dict[int, float] = {}  # chat_id → time.monotonic()
+_chat_lock = threading.Lock()
+_chat_cleanup_counter = 0  # Har 1000 chaqiruvda tozalash
+
 
 async def wait_send_gate() -> None:
-    """Umumiy tezlikni ta'minlash uchun kerak bo'lsa qisqa kutadi.
+    """Global + per-chat tezlikni ta'minlash uchun kutadi."""
+    global _next_allowed_at, _chat_cleanup_counter
 
-    Tezlik cheklovi 25 msg/s -> orasida ~0.04 s. Bu interval ichida ko'p
-    coroutine kelsa, barchasi tartibli o'tadi (token bucket, burst'ni ham
-    osonlashtiradi).
-    """
-    global _next_allowed_at
+    # 1. Global gate
     wait = 0.0
     with _lock:
         now = time.monotonic()
@@ -56,6 +53,33 @@ async def wait_send_gate() -> None:
             _next_allowed_at += _MIN_INTERVAL
         else:
             _next_allowed_at = now + _MIN_INTERVAL
+    if wait > 0:
+        await asyncio.sleep(wait)
+
+
+async def wait_chat_gate(chat_id: int) -> None:
+    """Per-chat tezlikni ta'minlash uchun kutadi."""
+    global _chat_cleanup_counter
+
+    with _chat_lock:
+        now = time.monotonic()
+        last = _chat_last_allowed.get(chat_id, 0.0)
+        wait = 0.0
+        if now - last < PER_CHAT_INTERVAL:
+            wait = PER_CHAT_INTERVAL - (now - last)
+        _chat_last_allowed[chat_id] = now + wait
+
+        # Periodic cleanup: eski entrylarni tozalash
+        _chat_cleanup_counter += 1
+        if _chat_cleanup_counter >= 1000:
+            _chat_cleanup_counter = 0
+            expired = [
+                cid for cid, t in _chat_last_allowed.items()
+                if now - t > 300  # 5 daqiqa oldingi
+            ]
+            for cid in expired:
+                del _chat_last_allowed[cid]
+
     if wait > 0:
         await asyncio.sleep(wait)
 

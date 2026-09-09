@@ -48,17 +48,13 @@ class Question(Base):
     order_number: Mapped[int] = mapped_column(Integer, default=1)
     text: Mapped[str] = mapped_column(Text)
 
-    # Tayyorgarlik va javob vaqti (soniyalarda)
     preparation_seconds: Mapped[int] = mapped_column(Integer, default=10)
     answer_seconds: Mapped[int] = mapped_column(Integer, default=30)
 
-    # Rasm va qo'shimcha ma'lumotlar
     image_path: Mapped[str | None] = mapped_column(String(500))
     sub_questions: Mapped[str | None] = mapped_column(Text)  # JSON string
-    pro_points: Mapped[str | None] = mapped_column(Text)  # Bölüm 3 uchun Lehine
-    con_points: Mapped[str | None] = mapped_column(Text)  # Bölüm 3 uchun Aleyhine
-
-    # Savol uchun maksimal ball (docx da "Ball: N" bilan beriladi)
+    pro_points: Mapped[str | None] = mapped_column(Text)
+    con_points: Mapped[str | None] = mapped_column(Text)
     max_points: Mapped[int | None] = mapped_column(Integer)
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -88,9 +84,7 @@ class TestAttempt(Base):
     )
     finished_at: Mapped[datetime | None] = mapped_column(DateTime)
 
-    # WebApp tugma yuborilgan chat (UX uchun). Imzolanmagan va ishonchsiz —
-    # FAQAT "Test yakunlandi" xabarini yuborish uchun. Avtorizatsiya/
-    # user_id uchun ASLO ishlatilmaydi (u faqat init_data HMAC imzosidan).
+    # WebApp tugma yuborilgan chat (faqat xabar yuborish uchun)
     chat_id: Mapped[int | None] = mapped_column(BigInteger)
 
     user: Mapped["User"] = relationship(back_populates="attempts")
@@ -131,7 +125,7 @@ class TestSettings(Base):
     )
     vip_limit: Mapped[int] = mapped_column(
         Integer,
-        default=1,  # VIP modeda kunlik limit
+        default=1,
     )
     date: Mapped[datetime] = mapped_column(
         DateTime,
@@ -141,3 +135,8 @@ class TestSettings(Base):
         DateTime,
         default=utcnow,
     )
+
+    # FIX #1: test holati va invite token endi DB da saqlanadi —
+    # bot restart bo'lsa ham yo'qolmaydi.
+    is_active: Mapped[bool] = mapped_column(Boolean, default=False)
+    invite_token: Mapped[str | None] = mapped_column(String(64), default=None)

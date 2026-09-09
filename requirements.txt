@@ -15,6 +15,7 @@ python-docx>=1.1
 Pillow>=11.0
 pytest>=8.3
 pytest-asyncio>=0.25
+psutil>=5.9
 python-dotenv>=1.0
 pyngrok>=7.0.0
 google-genai>=1.0.0

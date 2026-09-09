@@ -70,7 +70,7 @@ export default function App() {
                         setAttemptId(init.attempt_id)
                         fetchResults(init.attempt_id, initData)
                             .then(data => setResultsData(data))
-                            .catch(() => {})
+                            .catch(() => { })
                             .finally(() => setResultsLoading(false))
                     } else {
                         setResultsLoading(false)
@@ -149,6 +149,9 @@ export default function App() {
     const pollResults = useCallback(async (aid) => {
         if (pollRef.current) return
         setResultsPolling(true)
+        let pollInterval = 2000  // Start with 2s
+        const MAX_POLL_INTERVAL = 15000  // Cap at 15s
+
         const poll = async () => {
             try {
                 const data = await fetchResults(aid, initData)
@@ -162,10 +165,14 @@ export default function App() {
                     pollRef.current = null
                     return
                 }
-            } catch (_) {}
+                // Progressive backoff: 2s → 3s → 5s → 8s → 12s → 15s
+                pollInterval = Math.min(pollInterval * 1.5, MAX_POLL_INTERVAL)
+                clearInterval(pollRef.current)
+                pollRef.current = setInterval(poll, pollInterval)
+            } catch (_) { }
         }
         await poll()
-        pollRef.current = setInterval(poll, 4000)
+        pollRef.current = setInterval(poll, pollInterval)
     }, [initData])
 
     useEffect(() => {
@@ -197,7 +204,7 @@ export default function App() {
                 setResultsLoading(true)
                 fetchResults(attempt.id, initData)
                     .then(data => setResultsData(data))
-                    .catch(() => {})
+                    .catch(() => { })
                     .finally(() => setResultsLoading(false))
                 return
             }
@@ -308,7 +315,7 @@ export default function App() {
                 setResultsLoading(true)
                 fetchResults(aid, initData)
                     .then(data => setResultsData(data))
-                    .catch(() => {})
+                    .catch(() => { })
                     .finally(() => setResultsLoading(false))
             }
         } catch (e) {
@@ -362,7 +369,7 @@ export default function App() {
     if (finished || attemptStatus === 'finished') {
         return (
             <div className="app-wrapper">
-                <Results result={result} resultsData={resultsData} loading={resultsLoading} attemptId={attemptId} onClose={() => tg?.close()} />
+                <Results result={result} resultsData={resultsData} loading={resultsLoading} attemptId={attemptId} initData={initData} onClose={() => tg?.close()} />
             </div>
         )
     }

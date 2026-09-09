@@ -25,7 +25,7 @@ from app.main import app
 
 TEST_DB_URL = os.getenv(
     "TEST_DB_URL",
-    "postgresql+asyncpg://postgres:postgres@localhost:5432/turkish_bot_test",
+    "postgresql+asyncpg://postgres:123@localhost:5432/turkish_bot_test",
 )
 
 test_engine = create_async_engine(TEST_DB_URL, echo=False, poolclass=NullPool)
@@ -100,21 +100,27 @@ async def _create_question(session: AsyncSession, **kwargs) -> Question:
 
 
 # ═══════════════════════════════════════════════
-# Test 1 — Birinchi marta ro'yxatdan o'tish
+# Test 1 — /api/init yangi (ro'yxatdan o'tmagan) user uchun
 # ═══════════════════════════════════════════════
 @pytest.mark.anyio
-async def test_registration_creates_user():
+async def test_init_new_user_not_registered():
+    """Ro'yxatdan o'tmagan user /api/init da registered=False oladi.
+
+    Ro'yxatdan o'tish BOT orqali (taklif havolasi + telefon) amalga
+    oshiriladi — /api/init user yaratmaydi, faqat holatni qaytaradi.
+    """
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.post(
             "/api/init",
-            json={"init_data": make_init_data(99901)},
+            data={"init_data": make_init_data(99901)},
         )
 
     assert resp.status_code == 200
     data = resp.json()
     assert "user_id" in data
-    assert data["is_registered"] is True
+    assert data["registered"] is False
+    assert data["status"] is None
 
 
 # ═══════════════════════════════════════════════
@@ -129,11 +135,11 @@ async def test_existing_user_returns_same():
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp1 = await client.post(
             "/api/init",
-            json={"init_data": make_init_data(99902)},
+            data={"init_data": make_init_data(99902)},
         )
         resp2 = await client.post(
             "/api/init",
-            json={"init_data": make_init_data(99902)},
+            data={"init_data": make_init_data(99902)},
         )
 
     assert resp1.status_code == 200
@@ -150,7 +156,7 @@ async def test_init_invalid_data_401():
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.post(
             "/api/init",
-            json={"init_data": "invalid_string"},
+            data={"init_data": "invalid_string"},
         )
 
     assert resp.status_code == 401
@@ -163,7 +169,7 @@ async def test_init_invalid_data_401():
 async def test_init_missing_data_422():
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.post("/api/init", json={})
+        resp = await client.post("/api/init", data={})
 
     assert resp.status_code == 422
 
@@ -202,26 +208,29 @@ async def test_attempt_requires_registered_user():
 
 
 # ═══════════════════════════════════════════════
-# Test 7 — Registration stores correct telegram_id
+# Test 7 — /api/init ro'yxatdan o'tgan user'ni taniydi
 # ═══════════════════════════════════════════════
 @pytest.mark.anyio
-async def test_registration_stores_telegram_id():
+async def test_init_recognizes_registered_user():
+    """Bot orqali ro'yxatdan o'tgan (DB da mavjud) user /api/init da
+    registered=True qaytaradi. /api/init user yaratmaydi — faqat holatni
+    ko'rsatadi (ro'yxatdan o'tish bot'da amalga oshiriladi).
+    """
     telegram_id = 99907
+    async with TestSessionLocal() as session:
+        await _create_user(session, telegram_id=telegram_id)
+
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.post(
             "/api/init",
-            json={"init_data": make_init_data(telegram_id)},
+            data={"init_data": make_init_data(telegram_id)},
         )
 
     assert resp.status_code == 200
-    async with TestSessionLocal() as session:
-        from sqlalchemy import select
-        user = (await session.execute(
-            select(User).where(User.telegram_id == telegram_id)
-        )).scalar_one_or_none()
-        assert user is not None
-        assert user.telegram_id == telegram_id
+    data = resp.json()
+    assert data["user_id"] == telegram_id
+    assert data["registered"] is True
 
 
 # ═══════════════════════════════════════════════
@@ -257,7 +266,7 @@ async def test_init_returns_settings():
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.post(
             "/api/init",
-            json={"init_data": make_init_data(99909)},
+            data={"init_data": make_init_data(99909)},
         )
 
     assert resp.status_code == 200
@@ -274,11 +283,11 @@ async def test_multiple_users_independent():
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp1 = await client.post(
             "/api/init",
-            json={"init_data": make_init_data(99910)},
+            data={"init_data": make_init_data(99910)},
         )
         resp2 = await client.post(
             "/api/init",
-            json={"init_data": make_init_data(99911)},
+            data={"init_data": make_init_data(99911)},
         )
 
     assert resp1.status_code == 200

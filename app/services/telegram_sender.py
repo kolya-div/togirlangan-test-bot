@@ -23,7 +23,7 @@ from aiogram import Bot
 from aiogram.types import FSInputFile
 
 from app.config import settings
-from app.services.telegram_rate_limiter import wait_send_gate
+from app.services.telegram_rate_limiter import wait_send_gate, wait_chat_gate
 
 logger = logging.getLogger(__name__)
 
@@ -248,12 +248,12 @@ class TelegramSender:
 
         delay = BACKOFF_BASE
         last_err = None
-        bot = self._get_bot()
 
         for attempt in range(MAX_SEND_RETRIES):
             start = time.monotonic()
             try:
                 await wait_send_gate()  # Global rate limit
+                await wait_chat_gate(chat_id)  # Per-chat rate limit
                 await asyncio.wait_for(send_fn(), timeout=TELEGRAM_API_TIMEOUT)
                 duration = time.monotonic() - start
                 self._metrics.record_send(duration)
@@ -317,8 +317,27 @@ class TelegramSender:
         return False
 
     def _get_bot(self) -> Bot:
-        """Yangi Bot instansiyasi — loop ziddiyatini oldini oladi."""
-        return Bot(token=settings.bot_token)
+        """Umumiy (global) Bot instansiyasini qaytaradi.
+
+        BUG FIX: ilgari bu yerda har chaqiruvda `Bot(token=...)` yangidan
+        yaratilar edi. aiogram'ning `Bot` obyekti ichida aiohttp
+        `ClientSession` ochadi va u hech qachon yopilmagan edi (faqat
+        `app/bot/bot.py`dagi global `bot`ni `main.py` yopadi). Natijada
+        har bir yuborilgan xabar/audio/document uchun bitta yopilmagan
+        session sizib chiqar edi — 100 user × ko'p xabar bilan bu ochiq
+        socket/file descriptor sonini asta oshirib boradi.
+
+        Yechim: `app/bot/bot.py`dagi bitta global `Bot` instansiyasini
+        qayta ishlatamiz — u allaqachon `install_bot_throttle()` bilan
+        himoyalangan va `main.py` lifespan'da to'g'ri yopiladi.
+        Loop-conflict xavfi yo'q: aiogram Bot HTTP session'ni birinchi
+        chaqiruvda joriy event loop'ga bog'laydi va shu loop tirik
+        ekan davomida istalgan coroutine'dan foydalanish mumkin —
+        bizda bot ham, report worker'lar ham bitta FastAPI loopida
+        ishlaydi (main.py: start_report_workers() shu loopda chaqiriladi).
+        """
+        from app.bot.bot import bot as shared_bot
+        return shared_bot
 
     def update_queue_depth(self, depth: int):
         """Queue monitoring uchun."""

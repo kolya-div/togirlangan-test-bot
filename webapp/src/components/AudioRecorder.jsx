@@ -88,10 +88,17 @@ export default function AudioRecorder({
             initData
         )
     } catch (err) {
+        // BUG FIX: `stoppedRef.current` shu nuqtada normal oqimda HAR DOIM
+        // `true` bo'ladi — chunki `stopRecording()` uni `recorder.stop()`
+        // chaqirishdan oldin belgilaydi, `onstop` (va shu yuklash) esa faqat
+        // o'shandan keyin ishga tushadi. Shuning uchun `!stoppedRef.current`
+        // sharti retry'ni hech qachon ishga tushirmas edi — bitta tarmoq
+        // uzilishi javobni butunlay yo'qotardi. Komponent haqiqatan
+        // unmount bo'lganini `mountedRef.current` allaqachon to'g'ri
+        // tekshiradi, shuning uchun shu yerda faqat o'shani ishlatamiz.
         if (
             retries < MAX_RETRIES &&
-            mountedRef.current &&
-            !stoppedRef.current
+            mountedRef.current
         ) {
             await new Promise(r => setTimeout(r, 1000))
 

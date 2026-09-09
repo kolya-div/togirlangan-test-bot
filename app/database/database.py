@@ -5,7 +5,6 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 from sqlalchemy.orm import DeclarativeBase
-from sqlalchemy.pool import NullPool
 
 from app.config import settings
 
@@ -14,15 +13,19 @@ class Base(DeclarativeBase):
     pass
 
 
-# FastAPI alohida thread (o'z event loopi) da ishlaydi, bot esa asosiy
-# loopda — ikkalasi bir engine ni ishlatadi. asyncpg ulanishlari bitta
-# loopga bog'langan, shuning uchun pool ishlatilsa "attached to a
-# different loop" xatosi chiqadi. NullPool har safar yangi ulanish
-# ochib, o'sha loopda yopadi — looplararo ulanish almashishini yo'q qiladi.
+# Connection pool: NullPool o'rniga real pool ishlatiladi.
+# Pool size=20, max_overflow=20 — 40 ta bir vaqtdagi connection.
+# 100+ user uchun yetarli: webapp (20) + report workers (5) + bot (10) + zahira (5).
+# NullPool har safar yangi TCP connection ochardi (~500ms overhead/request),
+# real pool esa connection'larni qayta ishlatadi.
 engine = create_async_engine(
     settings.database_url,
     echo=False,
-    poolclass=NullPool,
+    pool_size=20,
+    max_overflow=20,
+    pool_timeout=30,
+    pool_pre_ping=True,  # Uzilgan connection'larni avtomatik aniqlash
+    pool_recycle=1800,   # 30 daqiqada eski connection'larni yangilash
 )
 
 SessionLocal = async_sessionmaker(

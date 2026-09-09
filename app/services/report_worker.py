@@ -44,17 +44,23 @@ def _get_process_fn():
 # 100 user finish qilsa: 100/60 = ~1.7 daqiqa — yetarli.
 REPORT_WORKERS = 5
 
-# Queue xavfsizlik chegarasi — 100+ user uchun yetarli
-MAX_QUEUE_SIZE = 200
+# Queue xavfsizlik chegarasi — 100+ user uchun yetarli.
+# 500 ta job: 5 worker × 2min/job batch = 25 jobs/min → 500/25 = 20 daqiqa buffer.
+MAX_QUEUE_SIZE = 500
 
 # Queue to'lib ketganida reject qilish vaqti
 ENQUEUE_TIMEOUT = 5.0
+
+# Queue to'lib ketganida qayta urinishlar soni
+MAX_RETRY_ENQUEUE = 3
+RETRY_ENQUEUE_DELAY = 10.0  # soniya
 
 _report_queue: asyncio.Queue[int] | None = None
 _report_worker_tasks: list[asyncio.Task] = []
 _started = False
 _stopping = False
 _pending_attempts: set[int] = set()
+_admin_queue_alerted = False  # Birinchi marta xabar berildi
 
 
 def _ensure_queue() -> asyncio.Queue[int]:
@@ -64,13 +70,40 @@ def _ensure_queue() -> asyncio.Queue[int]:
     return _report_queue
 
 
+async def _notify_admin_queue_full(queue) -> None:
+    """Adminlarga queue to'ligini xabar beradi (birinchi marta)."""
+    global _admin_queue_alerted
+    if _admin_queue_alerted:
+        return
+    _admin_queue_alerted = True
+    try:
+        from app.config import settings
+        from app.services.telegram_sender import telegram_sender
+        admin_ids = settings.admin_id_list
+        for admin_id in admin_ids:
+            await telegram_sender.send_message(
+                admin_id,
+                f"⚠️ <b>Hisobot navbati to'liq!</b>\n\n"
+                f"Navbat: {queue.qsize()}/{MAX_QUEUE_SIZE}\n"
+                f"Yangi hisobotlar vaqtincha kutib turiladi.\n"
+                f"Queue bo'shaganda avtomatik qayta ishlanadi.",
+            )
+    except Exception as e:
+        logger.warning("Admin xabar yuborilmadi: %s", e)
+
+
 async def enqueue_report(attempt_id: int, total_answers: int = 0) -> bool:
     """
     Hisobotni qayta ishlash navbatiga qo'shadi.
 
+    Queue to'lib ketganida:
+    - MAX_RETRY_ENQUEUE marta RETRY_ENQUEUE_DELAY soniya kutib qayta urinadi
+    - Barcha urinishlar muvaffaqiyatsiz bo'lsa — False qaytaradi
+    - Adminlarga xabar beriladi (birinchi marta to'lganda)
+
     Returns:
         True — muvaffaqiyatli qo'shildi
-        False — queue to'liq yoki duplicate
+        False — barcha urinishlar muvaffaqiyatsiz
     """
     if attempt_id in _pending_attempts:
         logger.info("Attempt #%s allaqachon navbatda, qo'shilmadi", attempt_id)
@@ -78,13 +111,24 @@ async def enqueue_report(attempt_id: int, total_answers: int = 0) -> bool:
 
     queue = _ensure_queue()
 
-    # Queue to'lib ketganini tekshirish
+    # Queue to'lib ketganini tekshirish + retry
     if queue.full():
-        logger.error(
-            "Queue to'liq (%s/%s), attempt #%s qo'shilmadi",
-            queue.qsize(), MAX_QUEUE_SIZE, attempt_id,
-        )
-        return False
+        await _notify_admin_queue_full(queue)
+        for retry in range(MAX_RETRY_ENQUEUE):
+            logger.warning(
+                "Queue to'liq (%s/%s), attempt #%s — qayta urinish %s/%s (%ss kutish)",
+                queue.qsize(), MAX_QUEUE_SIZE, attempt_id,
+                retry + 1, MAX_RETRY_ENQUEUE, RETRY_ENQUEUE_DELAY,
+            )
+            await asyncio.sleep(RETRY_ENQUEUE_DELAY)
+            if not queue.full():
+                break
+        else:
+            logger.error(
+                "Queue to'liq (%s/%s), attempt #%s — barcha %s urinishlar muvaffaqiyatsiz",
+                queue.qsize(), MAX_QUEUE_SIZE, attempt_id, MAX_RETRY_ENQUEUE,
+            )
+            return False
 
     _pending_attempts.add(attempt_id)
 
@@ -133,6 +177,11 @@ async def _report_worker(idx: int) -> None:
         finally:
             _pending_attempts.discard(attempt_id)
             queue.task_done()
+
+            # Queue bo'shaganida admin alert'ni tiklash
+            global _admin_queue_alerted
+            if _admin_queue_alerted and queue.qsize() < MAX_QUEUE_SIZE // 2:
+                _admin_queue_alerted = False
 
             # Agar to'xtatish buyrug'i keldi va navbat bo'sh — worker to'xtaydi
             if _stopping and queue.empty():

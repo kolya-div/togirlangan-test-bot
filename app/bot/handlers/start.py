@@ -5,7 +5,10 @@ from aiogram.fsm.context import FSMContext
 
 from app.bot.keyboards import admin_menu, webapp_keyboard
 from app.bot.states import RegistrationStates
-from app.bot.test_state import is_test_active
+# FIX #10: Modul import qilinadi (value emas) — token o'zgarganda ham yangi qiymat ko'rinadi.
+# Avval: `from app.bot.handlers.admin import ACTIVE_INVITE_TOKEN`
+# Bu Python'da qiymat NUSXALANADI, ya'ni admin token o'zgartirsa start.py eski None ni ko'rardi.
+from app.bot import test_state  # is_test_active(), get_invite_token()
 from app.config import settings
 from app.database.database import SessionLocal
 from app.database.repositories import (
@@ -25,12 +28,11 @@ async def start_handler(
     message: Message,
     state: FSMContext,
 ) -> None:
-    # Telegram /start parametrini olish
     args = message.text.split() if message.text else []
     ref_code = args[1] if len(args) > 1 else None
 
-    # Admin.py ichidagi hozirgi aktiv invite token
-    from app.bot.handlers.admin import ACTIVE_INVITE_TOKEN
+    # FIX #10: Modul orqali o'qiladi — har doim joriy qiymat.
+    active_token = test_state.get_invite_token()
 
     async with SessionLocal() as session:
         user = await get_or_create_user(
@@ -56,8 +58,8 @@ async def start_handler(
         # ==========================================
         if (
             ref_code
-            and ACTIVE_INVITE_TOKEN
-            and ref_code == ACTIVE_INVITE_TOKEN
+            and active_token
+            and ref_code == active_token
             and not user.is_registered
         ):
             await message.answer(
@@ -66,16 +68,13 @@ async def start_handler(
                 "Ro'yxatdan o'tishni boshlaymiz.\n\n"
                 "✏️ Ismingiz va familiyangizni kiriting:",
             )
-
-            await state.set_state(
-                RegistrationStates.waiting_full_name
-            )
+            await state.set_state(RegistrationStates.waiting_full_name)
             return
 
         # ==========================================
         # ESKI YOKI NOTO'G'RI LINK
         # ==========================================
-        if ref_code and ref_code != ACTIVE_INVITE_TOKEN and not user.is_registered:
+        if ref_code and ref_code != active_token and not user.is_registered:
             await message.answer(
                 "❌ Bu taklif havolasi eskirgan yoki yaroqsiz.\n\n"
                 "👤 Admin'dan yangi taklif havolasini oling.",
@@ -95,8 +94,7 @@ async def start_handler(
         # ==========================================
         # TEST FAOL
         # ==========================================
-        if is_test_active():
-            # Test allaqachon topshirilgan/boshlangan — qayta kirish taqiqlanadi
+        if test_state.is_test_active():
             last_attempt = await get_user_last_attempt(session, user.id)
             if last_attempt:
                 if last_attempt.status == "finished":
@@ -116,17 +114,15 @@ async def start_handler(
                         )
                         return
 
-            # Limit tekshirish
             test_settings = await get_test_settings(session)
-            daily_limit = 1  # Default
-            current_mode = "daily"  # Default
+            daily_limit = 1
+            current_mode = "daily"
 
             if test_settings:
                 current_mode = test_settings.test_mode
                 if current_mode == "vip":
                     daily_limit = test_settings.vip_limit
 
-            # Bugun qancha test topshirganini hisoblash
             today_attempts = await get_user_attempt_count_today(session, user.id)
 
             if today_attempts >= daily_limit:

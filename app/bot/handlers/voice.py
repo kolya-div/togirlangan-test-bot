@@ -7,6 +7,8 @@ import re
 from aiogram import F, Router
 from aiogram.types import Message
 
+from app.database.database import SessionLocal
+from app.database.repositories import get_user_by_telegram_id
 from app.services.transcription_service import transcribe_audio_file
 from app.services.text_check_service import check_turkish_text
 
@@ -20,6 +22,19 @@ MAX_TELEGRAM_VOICE_MB = 20
 
 @router.message(F.voice | F.audio)
 async def voice_message_handler(message: Message) -> None:
+    # FIX #6: Faqat ro'yxatdan o'tgan foydalanuvchilar AI xizmatidan foydalana oladi.
+    # Avval bu tekshiruv YO'Q edi — har qanday Telegram foydalanuvchisi
+    # transkripsiya + grammar check uchun AI API chaqira olardi (bepul emas!).
+    async with SessionLocal() as session:
+        user = await get_user_by_telegram_id(session, message.from_user.id)
+
+    if not user or not user.is_registered:
+        await message.answer(
+            "❌ Bu funksiyadan foydalanish uchun ro'yxatdan o'tgan bo'lishingiz kerak.\n\n"
+            "Admin bilan bog'laning."
+        )
+        return
+
     audio = message.voice or message.audio
 
     if hasattr(audio, "file_size") and audio.file_size:
@@ -123,10 +138,19 @@ def _annotate_transcript(transcript: str, mistakes: list[dict]) -> str:
             continue
 
         pattern = re.compile(re.escape(html.escape(original)), re.IGNORECASE)
-        replacement = f"<s>{html.escape(original)}</s>➡️<b>{html.escape(correct)}</b>"
+
+        # FIX #11: re.sub replacement string injection xavfi.
+        # Avval: pattern.sub(replacement_string, text) — replacement ichida
+        # \1, \g<name> kabi backreference'lar regex engine tomonidan
+        # qayta ishlangani uchun injection bo'lishi mumkin edi.
+        # Yechim: lambda ishlatish — replacement hech qachon regex engine'ga
+        # uzatilmaydi, literal string sifatida qaytariladi.
+        escaped_original = html.escape(original)
+        escaped_correct = html.escape(correct)
+        replacement_literal = f"<s>{escaped_original}</s>➡️<b>{escaped_correct}</b>"
 
         if pattern.search(text):
-            text = pattern.sub(replacement, text, count=1)
+            text = pattern.sub(lambda _: replacement_literal, text, count=1)
 
     return text
 

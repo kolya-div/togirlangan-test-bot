@@ -62,11 +62,14 @@ async def lifespan(app: FastAPI):
     await init_db()
     dp.update.middleware(DatabaseMiddleware())
 
-    # Hisobot navbati ishchilarini FastAPI loopida ishga tushiramiz — ular
-    # DB sessiyalarini (NullPool) shu loopda ochadi (loop ziddiyatsiz).
-    from app.services.ai_resource_manager import setup_providers
-    setup_providers()
-    start_report_workers()
+    # Provider va report worker'lar run.py dan boshqariladi (single loop mode).
+    # Agar mustaqil ishga tushirilgan bo'lsa (uvicorn app.main:app) —
+    # yerda ham ishga tushiramiz.
+    from app.services.report_worker import _started as workers_started
+    if not workers_started:
+        from app.services.ai_resource_manager import setup_providers
+        setup_providers()
+        start_report_workers()
 
     # Periodic stuck report recovery — har 5 daqiqada "processing" attemptlarni
     # tekshiradi, 30+ daqiqa turganlarni "active" ga qaytaradi.
@@ -79,7 +82,10 @@ async def lifespan(app: FastAPI):
         await recovery_task
     except asyncio.CancelledError:
         pass
-    await stop_report_workers()
+    # Worker'lar run.py dan to'xtatiladi; agar mustaqil ishga tushirilgan bo'lsa
+    # yerda to'xtatamiz.
+    if not workers_started:
+        await stop_report_workers()
     await bot.session.close()
 
 

@@ -73,7 +73,7 @@ import os
 from sqlalchemy.pool import NullPool
 TEST_DB_URL = os.getenv(
     "TEST_DB_URL",
-    "postgresql+asyncpg://postgres:postgres@localhost:5432/turkish_bot_test",
+    "postgresql+asyncpg://postgres:123@localhost:5432/turkish_bot_test",
 )
 # NullPool: har ulanish yangi ochiladi — Windows'dagi loop birlashuvi
 # ("attached to a different loop") xatosini oldini oladi.
@@ -155,10 +155,14 @@ async def test_first_attempt_creates_active():
 
 
 # ═══════════════════════════════════════════════
-# Test 2 — Active test bilan qayta kirish
+# Test 2 — Active test bilan qayta kirish TAQIQLANADI
 # ═══════════════════════════════════════════════
 @pytest.mark.anyio
-async def test_existing_active_returns_same():
+async def test_active_attempt_reentry_blocked():
+    """Faol attempt bor bo'lganda /api/attempts ga qayta kirish 403 bilan
+    taqiqlanadi — kuniga bitta test, "Testni boshlash" tugmasi faqat bir
+    marta ishlatilishi kerak (design bo'yicha).
+    """
     async with TestSessionLocal() as session:
         await _create_user(session)
 
@@ -168,11 +172,7 @@ async def test_existing_active_returns_same():
         assert resp1.json()["existing"] is False
 
         resp2 = await client.post("/api/attempts", data={"init_data": make_init_data(12345)})
-        assert resp2.status_code == 200
-        data = resp2.json()
-        assert data["existing"] is True
-        assert data["id"] == resp1.json()["id"]
-        assert data["status"] == "active"
+        assert resp2.status_code == 403
 
 
 # ═══════════════════════════════════════════════
@@ -548,7 +548,7 @@ async def test_results_wrong_user_403():
         )
 
     assert resp.status_code == 403
-    assert "tegasli emas" in resp.json()["detail"]
+    assert "tegishli emas" in resp.json()["detail"]
 
 
 # ═══════════════════════════════════════════════
@@ -629,7 +629,7 @@ async def test_answer_upload_wrong_user_403():
         )
 
     assert resp.status_code == 403
-    assert "tegasli emas" in resp.json()["detail"]
+    assert "tegishli emas" in resp.json()["detail"]
 
 
 # ═══════════════════════════════════════════════
@@ -674,7 +674,7 @@ async def test_finish_wrong_user_403():
         )
 
     assert resp.status_code == 403
-    assert "tegasli emas" in resp.json()["detail"]
+    assert "tegishli emas" in resp.json()["detail"]
 
 
 # ═══════════════════════════════════════════════

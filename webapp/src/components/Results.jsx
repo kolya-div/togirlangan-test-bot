@@ -121,12 +121,16 @@ function QuestionResult({ item, index, total }) {
     )
 }
 
-export default function Results({ result, resultsData, loading, onClose, attemptId }) {
+export default function Results({ result, resultsData, loading, onClose, attemptId, initData }) {
     const isProcessing = result?.processing && !resultsData
 
     const handleClose = () => {
+        // BUG FIX: `initData` avval umuman uzatilmagan edi — backend uni
+        // majburiy talab qiladi (Telegram HMAC tekshiruvi uchun), shuning
+        // uchun bu chaqiruv har doim 401 bilan (sokin, .catch() ichida)
+        // muvaffaqiyatsiz tugar edi.
         const id = attemptId || resultsData?.attempt_id
-        if (id) notifyTestClosed(id).catch(() => {})
+        if (id) notifyTestClosed(id, initData).catch(() => {})
         onClose()
     }
 

@@ -21,7 +21,7 @@ from app.main import app
 
 TEST_DB_URL = os.getenv(
     "TEST_DB_URL",
-    "postgresql+asyncpg://postgres:postgres@localhost:5432/turkish_bot_test",
+    "postgresql+asyncpg://postgres:123@localhost:5432/turkish_bot_test",
 )
 
 test_engine = create_async_engine(TEST_DB_URL, echo=False, poolclass=NullPool)

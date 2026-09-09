@@ -21,7 +21,7 @@ from app.config import settings
 
 TEST_DB_URL = os.getenv(
     "TEST_DB_URL",
-    "postgresql+asyncpg://postgres:postgres@localhost:5432/turkish_bot_test",
+    "postgresql+asyncpg://postgres:123@localhost:5432/turkish_bot_test",
 )
 
 test_engine = create_async_engine(TEST_DB_URL, echo=False, poolclass=NullPool)
@@ -40,7 +40,9 @@ async def setup_db():
 
 @pytest.fixture(autouse=True)
 def mock_session():
-    with patch("app.api.routes.SessionLocal", TestSessionLocal):
+    with patch("app.api.routes.SessionLocal", TestSessionLocal), patch(
+        "app.main.SessionLocal", TestSessionLocal
+    ):
         yield
 
 
@@ -81,7 +83,7 @@ async def test_health_does_not_leak_db_errors():
 @pytest.mark.anyio
 async def test_global_exception_handler_hides_details():
     with patch("app.api.routes.SessionLocal", side_effect=Exception("SECRET_DB_PASSWORD=supersecret")):
-        transport = ASGITransport(app=app)
+        transport = ASGITransport(app=app, raise_app_exceptions=False)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             resp = await client.get("/api/questions")
 

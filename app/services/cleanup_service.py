@@ -1,4 +1,5 @@
 import logging
+import time
 from datetime import timedelta
 from pathlib import Path
 
@@ -18,6 +19,21 @@ PROCESSING_STALE_MINUTES = 30
 # Bu vaqtdan eski yakunlangan/tugallanmagan attemptlar (javoblari va
 # audio fayllari bilan birga) o'chiriladi.
 DELETE_OLDER_DAYS = 30
+
+# BUG FIX: routes.py'dagi upload_answer() audio faylni avval vaqtinchalik
+# nom bilan (".upload_{attempt_id}_{question_id}_...") shu papkaga yozadi
+# va faqat TO'LIQ yuklanib, DB'ga answer yozuvi commit bo'lgandan keyin
+# yakuniy nomga o'zgartiradi (os.replace). `Path.rglob("*")` esa nuqta
+# bilan boshlangan ("yashirin") fayllarni ham qamrab oladi — shuning
+# uchun agar `delete_orphan_audios` aynan kimdir audio yuklab turgan
+# paytda ishga tushsa (hali DB'da answer yo'q), bu vaqtinchalik faylni
+# "orphan" deb o'chirib yuborishi mumkin edi. Natijada `os.replace`
+# FileNotFoundError berib, foydalanuvchining yuklashi 500 xato bilan
+# muvaffaqiyatsiz tugar edi (audio qayta yozib yuborilishi kerak bo'lardi).
+#
+# Yechim: hali yaqinda (bu chegaradan kam vaqt oldin) o'zgargan fayllarni
+# "orphan" deb hisoblamaymiz — ular hali yuklanayotgan bo'lishi mumkin.
+ORPHAN_MIN_AGE_SECONDS = 600  # 10 daqiqa
 
 
 async def reset_stuck_processing(session: AsyncSession) -> int:
@@ -69,22 +85,55 @@ async def delete_old_attempts(session: AsyncSession) -> dict:
 
 
 async def delete_orphan_audios(session: AsyncSession) -> int:
-    """Hech qanday javobga bog'lanmagan audio fayllarni o'chirish."""
+    """Hech qanday javobga bog'lanmagan audio fayllarni o'chirish.
+
+    Race condition himoyasi: fayllarni skanerlash va o'chirish orasida
+    yangi answer qo'shilishi mumkin. Shuning uchun o'chirishdan OLDIN
+    qayta tekshiriladi — fayl hali ham DB'da yo'q bo'lsa va faqat
+    ORPHAN_MIN_AGE_SECONDS dan eski bo'lsa o'chiriladi.
+    """
     audio_res = await session.execute(select(Answer.audio_path).where(Answer.audio_path.isnot(None)))
     referenced = {str(path) for (path,) in audio_res.all()}
     referenced = {p.replace("\\", "/") for p in referenced}
 
     audios_dir = Path(settings.upload_dir)
+    now = time.time()
     orphan_paths = []
     if audios_dir.exists():
         for file in audios_dir.rglob("*"):
-            if file.is_file():
-                relative = str(file).replace("\\", "/")
-                if relative not in referenced:
-                    orphan_paths.append(str(file))
+            if not file.is_file():
+                continue
+            relative = str(file).replace("\\", "/")
+            if relative in referenced:
+                continue
+            # Hali yuklanayotgan bo'lishi mumkin bo'lgan yangi/vaqtinchalik
+            # fayllarni tegmasdan qoldiramiz (qarang: ORPHAN_MIN_AGE_SECONDS).
+            try:
+                age = now - file.stat().st_mtime
+            except OSError:
+                continue
+            if age < ORPHAN_MIN_AGE_SECONDS:
+                continue
+            orphan_paths.append(str(file))
 
-    deleted = _delete_files(orphan_paths)
-    logger.info("Deleted %s orphan audio files", deleted)
+    # RACE CONDITION HIMoyASI: o'chirishdan oldin qayta tekshirish.
+    # Bu oraliqda fayl DB'ga bog'langan bo'lishi mumkin (answer record added).
+    audio_res2 = await session.execute(select(Answer.audio_path).where(Answer.audio_path.isnot(None)))
+    referenced_now = {str(path) for (path,) in audio_res2.all()}
+    referenced_now = {p.replace("\\", "/") for p in referenced_now}
+
+    # Faqat hali ham DB'da bog'lanmagan fayllarni o'chiramiz
+    still_orphan = [p for p in orphan_paths if p.replace("\\", "/") not in referenced_now]
+
+    deleted = _delete_files(still_orphan)
+    if len(orphan_paths) != len(still_orphan):
+        logger.info(
+            "Orphan scan: %d found, %d re-verified, %d deleted (race saved %d)",
+            len(orphan_paths), len(still_orphan), deleted,
+            len(orphan_paths) - len(still_orphan),
+        )
+    else:
+        logger.info("Deleted %s orphan audio files", deleted)
     return deleted
 
 

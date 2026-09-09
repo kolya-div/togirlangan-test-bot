@@ -1,6 +1,9 @@
 """
 run.py — Hamma narsani bir joyda ishga tushiradi (Cloudflare Tunnel bilan).
 
+Arxitektura: Bitta event loop — bot polling va FastAPI shu loopda ishlaydi.
+DB connection pool: real pool (pool_size=20), NullPool emas.
+
 Ishlatilish:
     python run.py
 """
@@ -9,7 +12,7 @@ import asyncio
 import logging
 import os
 import sys
-import threading
+import signal
 import subprocess
 from datetime import timedelta
 
@@ -56,9 +59,6 @@ def start_ngrok():
         logger.info("🔌 Ngrok ulanmoqda...")
         conf.get_default().auth_token = token
 
-        # 1-urinish: allaqachon ishlayotgan tunnel bormi?
-        # (eski ngrok agent tirik bo'lsa ERR_NGROK_334 beradi — undan
-        # qochish uchun mavjud 8000 tunnelini qayta ishlatamiz)
         try:
             for t in ngrok.get_tunnels():
                 addr = str(t.config.get("addr", ""))
@@ -72,20 +72,17 @@ def start_ngrok():
         except Exception:
             pass
 
-        # Eski ochilgan ngrok jarayonlarini tozalash
         try:
             ngrok.kill()
         except Exception:
             pass
 
-        # Tunnelni ochish (ortda qolgan agent egasini bo'shatishi uchun bir oz kutamiz)
         last_error = None
         for attempt in range(3):
             try:
                 tunnel = ngrok.connect(8000, "http")
                 NGROK_PUBLIC_URL = tunnel.public_url
 
-                # http larni https ga o'tkazish (Telegram faqat https qabul qiladi)
                 if NGROK_PUBLIC_URL.startswith("http://"):
                     NGROK_PUBLIC_URL = NGROK_PUBLIC_URL.replace("http://", "https://")
 
@@ -112,26 +109,6 @@ def start_ngrok():
     return False
 
 # ──────────────────────────────────────────
-# FASTAPI SERVER (thread ichida)
-# ──────────────────────────────────────────
-def start_fastapi():
-    """FastAPI ni alohida thread da ishga tushiradi."""
-    # SAFETY: asyncio.Queue in-memory — faqat workers=1 bilan ishlaydi.
-    # Workers > 1 ishlatsa, report joblar yo'qoladi (silent job loss).
-    workers = 1
-    uvicorn.run(
-        "app.main:app",
-        host="0.0.0.0",
-        port=8000,
-        log_level="warning",
-        access_log=False,
-        workers=workers,
-        limit_concurrency=300,
-        timeout_keep_alive=60,
-    )
-
-
-# ──────────────────────────────────────────
 # TELEGRAM BOT
 # ──────────────────────────────────────────
 async def start_bot():
@@ -146,13 +123,6 @@ async def start_bot():
     # Background task: har kuni 00:00 da limitni qaytarish
     asyncio.create_task(daily_limit_reset_task())
 
-    # Eksport+wipe scheduler: har kuni 00:00 da natijalarni .docx ga eksport
-    # qiladi va (kamida 1 admin faylni olgan bo'lsa) BARCHA foydalanuvchilarni
-    # tozalaydi. Savollar va test sozlamalari saqlanadi.
-    # PARTIAL: 2026-08-31 — xavfli wipe (adminlarni ham o'chiradi) tufayli
-    # vaqtincha kommentariya qilindi. Xavfsiz wipe tasdiqlanmaguncha yoqilmang.
-    # asyncio.create_task(daily_export_wipe_task())
-
     await dp.start_polling(bot)
 
 
@@ -164,57 +134,20 @@ async def daily_limit_reset_task():
     from app.utils.helpers import utcnow
 
     while True:
-        # Bugun 00:00 ni hisoblash
         now = utcnow()
         tomorrow = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
         seconds_until_midnight = (tomorrow - now).total_seconds()
 
         logger.info(f"⏰ Limit qaytarish {seconds_until_midnight:.0f} soniyadan so'ng amalga oshadi.")
 
-        # 00:00 gacha kutish
         await asyncio.sleep(seconds_until_midnight)
 
-        # Limitni qaytarish
         try:
             async with SessionLocal() as session:
                 await create_or_update_test_settings(session, "daily", 1)
                 logger.info("✅ Kunlik limit avtomatik qaytarildi (daily mode, limit=1)")
         except Exception as e:
             logger.error(f"❌ Limit qaytarishda xato: {e}")
-
-
-async def daily_export_wipe_task():
-    """Har kuni 00:00 da foydalanuvchilar natijalarini .docx hisobotga
-    eksport qiladi va adminlarning kamida bittasi faylni olgan bo'lsa
-    bazani tozalaydi (wipe).
-
-    Bu vazifa run_daily_export_and_wipe() orqali ishlaydi:
-      - Eksport .docx fayli adminlarga yuboriladi.
-      - admin_id_list bo'sh bo'lsa yoki hech bir admin faylni olmagan
-        bo'lsa — wipe bajarilmaydi, fayl saqlanadi.
-      - Kamida bitta admin faylni olgan bo'lsa — wipe bajariladi va
-        yuborilgan fayl o'chiriladi.
-    """
-    from app.services.daily_export_wipe import run_daily_export_and_wipe
-    from app.utils.helpers import utcnow
-
-    while True:
-        now = utcnow()
-        tomorrow = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
-        seconds_until_midnight = (tomorrow - now).total_seconds()
-
-        logger.info(f"📊 Eksport+wipe {seconds_until_midnight:.0f} soniyadan so'ng (00:00) amalga oshadi.")
-
-        await asyncio.sleep(seconds_until_midnight)
-
-        try:
-            result = await run_daily_export_and_wipe()
-            if result is None:
-                logger.info("📊 Eksport+wipe: wipe bajarilmadi (fayl saqlanib qoldi).")
-            else:
-                logger.info(f"📊 Eksport+wipe tugallandi: {result}")
-        except Exception as e:
-            logger.error(f"❌ Eksport+wipe xato: {e}")
 
 
 # ──────────────────────────────────────────
@@ -232,10 +165,8 @@ def start_vite():
         return
 
     try:
-        # Windows'da npm odatda npm.cmd bo'ladi.
         npm_command = "npm.cmd" if sys.platform == "win32" else "npm"
 
-        # PATH orqali npm'ni topishga harakat qilamiz.
         import shutil
         npm_path = shutil.which(npm_command)
 
@@ -266,32 +197,34 @@ def start_vite():
 
 
 # ──────────────────────────────────────────
-# ASOSIY ISHGA TUSHIRISH
+# ASOSIY ISHGA TUSHIRISH — Bitta event loop
 # ──────────────────────────────────────────
 async def main():
-    # 1. Vite frontendni ishga tushirish (eng birinchi)
+    from app.main import app
+    from app.bot.bot import bot, dp
+    from app.database.database import init_db
+    from app.services.report_worker import start_report_workers, stop_report_workers
+    from app.services.ai_resource_manager import setup_providers
+
+    # 1. DB ni ishga tushirish
+    await init_db()
+
+    # 2. AI providerlarni ro'yxatdan o'tkazish
+    setup_providers()
+
+    # 3. Report workerlarni ishga tushirish (bitta loopda — pool safe)
+    start_report_workers()
+
+    # 4. Vite frontendni ishga tushirish
     logger.info("🌐 Frontend (Vite) ishga tushmoqda...")
     start_vite()
 
-    # 2. FastAPI serverni ishga tushirish
-    logger.info("🚀 FastAPI ishga tushmoqda...")
-    fastapi_thread = threading.Thread(
-        target=start_fastapi,
-        daemon=True
-    )
-    fastapi_thread.start()
-
-    # Server ishga tushishini kutish
-    await asyncio.sleep(1.5)
-    logger.info("✅ FastAPI tayyor: http://localhost:8000")
-
-    # 2. Ngrok tunnelni ishga tushirish (start_ngrok chaqiriladi)
+    # 5. Ngrok tunnelni ishga tushirish
     start_ngrok()
 
-    # 3. WebApp URL ni yangilash
+    # 6. WebApp URL ni yangilash
     if NGROK_PUBLIC_URL:
         try:
-            from app.config import settings
             settings.webapp_url = NGROK_PUBLIC_URL
         except Exception:
             pass
@@ -300,9 +233,55 @@ async def main():
     else:
         logger.warning("⚠️ Ngrok URL olinmadi, lekin bot ishlayveradi.")
 
-    # 4. Botni ishga tushirish
+    # 7. Uvicorn serverni bitta loopda ishga tushirish (thread emas!)
+    # Thread o'rniga background task — bitta event loop, bitta pool.
+    config = uvicorn.Config(
+        app,
+        host="0.0.0.0",
+        port=8000,
+        log_level="warning",
+        access_log=False,
+        workers=1,
+        limit_concurrency=300,
+        timeout_keep_alive=60,
+    )
+    server = uvicorn.Server(config)
+
+    logger.info("🚀 FastAPI + Bot bitta loop'da ishga tushmoqda...")
+
+    # Server'ni background task sifatida ishga tushirish
+    server_task = asyncio.create_task(server.serve())
+
+    # Server ishga tushishini kutish
+    while not server.started:
+        await asyncio.sleep(0.1)
+
+    logger.info("✅ FastAPI tayyor: http://localhost:8000")
     logger.info("🤖 Bot ishga tushmoqda...")
-    await start_bot()
+
+    # 8. Bot polling — asosiy loopni bloklab turadi
+    try:
+        await dp.start_polling(bot)
+    finally:
+        # Graceful shutdown: server'ni to'xtatish
+        server.should_exit = True
+        try:
+            await asyncio.wait_for(server_task, timeout=10)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            server_task.cancel()
+            try:
+                await server_task
+            except asyncio.CancelledError:
+                pass
+
+        # Report workerlarni to'xtatish
+        await stop_report_workers()
+
+        # Bot session'ni yopish
+        await bot.session.close()
+
+        logger.info("👋 Bot to'xtatildi.")
+
 
 # ──────────────────────────────────────────
 # ENTRY POINT
@@ -316,6 +295,7 @@ if __name__ == "__main__":
     print(f"   Admins    : {_admin_count} ta (qiymatlar loglanmaydi)")
     print(f"   AI Prov.  : {os.getenv('AI_PROVIDER', 'openai')}")
     print(f"   Port      : 8000")
+    print(f"   Mode      : Single event loop (no threading)")
     print("=" * 56)
     print()
     

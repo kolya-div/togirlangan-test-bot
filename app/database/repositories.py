@@ -35,6 +35,17 @@ async def get_or_create_user(
     return user
 
 
+async def get_user_by_telegram_id(
+    session: AsyncSession,
+    telegram_id: int,
+) -> User | None:
+    """Telegram ID bo'yicha foydalanuvchini olish."""
+    result = await session.execute(
+        select(User).where(User.telegram_id == telegram_id),
+    )
+    return result.scalar_one_or_none()
+
+
 async def count_users(session: AsyncSession) -> int:
     result = await session.execute(
         select(func.count(User.id)).where(
@@ -42,6 +53,7 @@ async def count_users(session: AsyncSession) -> int:
         ),
     )
     return int(result.scalar_one())
+
 
 async def get_registered_users(session: AsyncSession) -> list[User]:
     """Ro'yxatdan o'tgan barcha foydalanuvchilarni olish."""
@@ -52,6 +64,7 @@ async def get_registered_users(session: AsyncSession) -> list[User]:
         )
     )
     return list(result.scalars().all())
+
 
 # ==================== QUESTIONS ====================
 
@@ -79,7 +92,7 @@ async def get_questions_by_section(session: AsyncSession, section: str) -> list[
 async def add_question(
     session: AsyncSession,
     section: str,
-    order_number: int,  # ✅ order_num → order_number
+    order_number: int,
     text: str,
     preparation_seconds: int,
     answer_seconds: int,
@@ -149,30 +162,68 @@ async def create_or_update_test_settings(
     vip_limit: int = 1,
 ) -> TestSettings:
     """Test sozlamalarini yaratish yoki yangilash."""
-    # Bugungi sozlamalarni tekshirish
     today = utcnow().date()
     result = await session.execute(
         select(TestSettings).where(
             TestSettings.date.cast(Date) == today
         ).order_by(TestSettings.id.desc()).limit(1)
     )
-    settings = result.scalar_one_or_none()
+    settings_row = result.scalar_one_or_none()
 
-    if settings:
-        settings.test_mode = test_mode
-        settings.vip_limit = vip_limit
-        settings.updated_at = utcnow()
+    if settings_row:
+        settings_row.test_mode = test_mode
+        settings_row.vip_limit = vip_limit
+        settings_row.updated_at = utcnow()
     else:
-        settings = TestSettings(
+        settings_row = TestSettings(
             test_mode=test_mode,
             vip_limit=vip_limit,
             date=utcnow(),
         )
-        session.add(settings)
+        session.add(settings_row)
 
     await session.commit()
-    await session.refresh(settings)
-    return settings
+    await session.refresh(settings_row)
+    return settings_row
+
+
+async def _upsert_test_active(session: AsyncSession, is_active: bool) -> None:
+    """
+    FIX #1: test holati DB da saqlanadi.
+    Mavjud TestSettings yozuvini yangilaydi; yo'q bo'lsa yaratadi.
+    """
+    result = await session.execute(
+        select(TestSettings).order_by(TestSettings.id.desc()).limit(1)
+    )
+    settings_row = result.scalar_one_or_none()
+
+    if settings_row:
+        settings_row.is_active = is_active
+        settings_row.updated_at = utcnow()
+    else:
+        settings_row = TestSettings(is_active=is_active, date=utcnow())
+        session.add(settings_row)
+
+    await session.commit()
+
+
+async def _upsert_invite_token(session: AsyncSession, token: str | None) -> None:
+    """
+    FIX #2: invite token DB da saqlanadi — restart safe.
+    """
+    result = await session.execute(
+        select(TestSettings).order_by(TestSettings.id.desc()).limit(1)
+    )
+    settings_row = result.scalar_one_or_none()
+
+    if settings_row:
+        settings_row.invite_token = token
+        settings_row.updated_at = utcnow()
+    else:
+        settings_row = TestSettings(invite_token=token, date=utcnow())
+        session.add(settings_row)
+
+    await session.commit()
 
 
 async def get_user_attempt_count_today(

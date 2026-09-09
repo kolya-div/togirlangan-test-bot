@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import zipfile
@@ -11,7 +12,10 @@ from aiogram.fsm.context import FSMContext
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.bot.test_state import set_test_active, is_test_active
+# FIX #1 & #2: test_state moduli orqali DB da saqlanadigan holatdan foydalanamiz.
+# Avval: from app.bot.test_state import set_test_active, is_test_active
+# Va:    ACTIVE_INVITE_TOKEN = None  (global volatile variable)
+from app.bot import test_state  # is_test_active(), set_test_active(), get/set_invite_token()
 
 from app.bot.keyboards import (
     admin_menu,
@@ -56,15 +60,15 @@ from app.services.daily_export_wipe import (
     run_admin_export_only,
 )
 
-logger = logging.getLogger(__name__)  # ✅ QO'SHILDI
-
-
-ACTIVE_INVITE_TOKEN = None
+logger = logging.getLogger(__name__)
 
 from app.services.docx_parser import parse_docx_questions
 from app.services.ai_docx_service import parse_docx_with_ai
 
 router = Router()
+
+# Broadcast xabarlari orasidagi minimal interval (Telegram flood limit xavfsizligi).
+_BROADCAST_INTERVAL = 0.05  # 20 msg/s — Telegram 30 msg/s limitidan past
 
 
 async def _safe_edit(message, **kwargs):
@@ -118,13 +122,18 @@ async def _save_questions(session: AsyncSession, questions: list[dict]) -> int:
 
 @router.callback_query(F.data == "test_access")
 async def test_access_handler(callback: CallbackQuery, state: FSMContext) -> None:
+    """
+    FIX #3: Duplicate `test_access` handler o'chirildi.
+    Avval ikkinchi `test_access_back_handler` ham bor edi — aiogram
+    birinchisini ishlatardi, ikkinchisi hech qachon ishlamasdi.
+    Ikkalasi bitta handlerga birlashtirildi.
+    """
     if callback.from_user.id not in settings.admin_id_list:
         await callback.answer("Ruxsat yo'q", show_alert=True)
         return
 
     await state.set_state(AdminTestAccessStates.menu)
 
-    # Hozirgi sozlamalarni olish
     from app.database.database import SessionLocal
     async with SessionLocal() as session:
         test_settings = await get_test_settings(session)
@@ -207,25 +216,21 @@ async def process_vip_limit(message: Message, state: FSMContext) -> None:
 
 @router.callback_query(F.data == "invite_link")
 async def invite_link_handler(callback: CallbackQuery) -> None:
-    global ACTIVE_INVITE_TOKEN
-
     if callback.from_user.id not in settings.admin_id_list:
         await callback.answer("Ruxsat yo'q", show_alert=True)
         return
 
-    # Bot ma'lumotlarini olish
     bot_info = await callback.bot.get_me()
 
-    # Har safar yangi token yaratish
-    ACTIVE_INVITE_TOKEN = secrets.token_urlsafe(16)
+    # FIX #2: Token DB ga saqlanadi — bot restart bo'lsa ham ishlaydi.
+    new_token = secrets.token_urlsafe(16)
+    await test_state.set_invite_token(new_token)
 
-    # Yangi taklif havolasi
     invite_link = (
         f"https://t.me/{bot_info.username}"
-        f"?start={ACTIVE_INVITE_TOKEN}"
+        f"?start={new_token}"
     )
 
-    # Botga olib boradigan tugma
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -257,7 +262,7 @@ async def questions_menu_handler(callback: CallbackQuery, state: FSMContext) -> 
     if callback.from_user.id not in settings.admin_id_list:
         await callback.answer("Ruxsat yo'q", show_alert=True)
         return
-    
+
     await state.set_state(AdminQuestionsStates.menu)
     await _safe_edit(
         callback.message,
@@ -273,15 +278,15 @@ async def activate_test_handler(callback: CallbackQuery, state: FSMContext) -> N
     if callback.from_user.id not in settings.admin_id_list:
         await callback.answer("Ruxsat yo'q", show_alert=True)
         return
-    
+
     await state.set_state(AdminActivateStates.confirm)
-    
-    status = "✅ FAOL" if is_test_active() else "🛑 O'CHIQ"
+
+    status = "✅ FAOL" if test_state.is_test_active() else "🛑 O'CHIQ"
     await _safe_edit(
         callback.message,
         text=f"🚀 Test holati: {status}\n\n"
         f"Testni faollashtirish yoki to'xtatishni xohlaysizmi?",
-        reply_markup=activate_test_keyboard(is_active=is_test_active()),
+        reply_markup=activate_test_keyboard(is_active=test_state.is_test_active()),
     )
     await callback.answer()
 
@@ -291,7 +296,7 @@ async def results_handler(callback: CallbackQuery, state: FSMContext) -> None:
     if callback.from_user.id not in settings.admin_id_list:
         await callback.answer("Ruxsat yo'q", show_alert=True)
         return
-    
+
     await state.set_state(AdminResultsStates.menu)
     await _safe_edit(
         callback.message,
@@ -301,6 +306,7 @@ async def results_handler(callback: CallbackQuery, state: FSMContext) -> None:
     )
     await callback.answer()
 
+
 # ==================== SAVOLLAR MENYUSI ====================
 
 @router.callback_query(F.data == "upload_docx")
@@ -308,7 +314,7 @@ async def upload_docx_handler(callback: CallbackQuery, state: FSMContext) -> Non
     if callback.from_user.id not in settings.admin_id_list:
         await callback.answer("Ruxsat yo'q", show_alert=True)
         return
-    
+
     await state.set_state(AdminQuestionsStates.waiting_docx)
     await _safe_edit(
         callback.message,
@@ -354,7 +360,6 @@ async def process_docx(message: Message, state: FSMContext, session: AsyncSessio
     if not file_path:
         return
 
-    # Parse qilish
     try:
         questions = await parse_docx_questions(file_path)
     except Exception as e:
@@ -365,7 +370,6 @@ async def process_docx(message: Message, state: FSMContext, session: AsyncSessio
         await message.answer("❌ Faylda savollar topilmadi. Formatni tekshiring.")
         return
 
-    # Bazaga saqlash
     count = await _save_questions(session, questions)
 
     await message.answer(
@@ -428,9 +432,9 @@ async def list_questions_handler(callback: CallbackQuery, session: AsyncSession)
     if callback.from_user.id not in settings.admin_id_list:
         await callback.answer("Ruxsat yo'q", show_alert=True)
         return
-    
+
     questions = await get_all_questions(session)
-    
+
     if not questions:
         await _safe_edit(callback.message, text="📋 Hozircha savollar yo'q.\n\n"
             "➕ Savol kiritish tugmasini bosing.",
@@ -438,16 +442,15 @@ async def list_questions_handler(callback: CallbackQuery, session: AsyncSession)
         )
         await callback.answer()
         return
-    
+
     text = f"📋 Jami savollar: {len(questions)} ta\n\n"
-    
+
     current_section = None
     for q in questions:
         if q.section != current_section:
             current_section = q.section
             text += f"\n<b>📚 Bölüm {current_section}</b>\n"
-        
-        # sub_questions JSON string bo'lishi mumkin, shuni tekshiramiz
+
         sub_count = 0
         if q.sub_questions:
             try:
@@ -455,14 +458,13 @@ async def list_questions_handler(callback: CallbackQuery, session: AsyncSession)
                 sub_count = len(sub_list) if isinstance(sub_list, list) else 0
             except (json.JSONDecodeError, ValueError, TypeError):
                 sub_count = 0
-        
+
         sub = f" (+{sub_count} ta)" if sub_count > 0 else ""
         text += f"  {q.order_number}. {q.text[:60]}{sub} ({q.preparation_seconds}s/{q.answer_seconds}s)\n"
-    
-    # Xabar juda uzun bo'lsa, qisqartirish
+
     if len(text) > 4000:
         text = text[:4000] + "\n\n..."
-    
+
     await _safe_edit(
         callback.message,
         text=text,
@@ -477,9 +479,9 @@ async def delete_questions_handler(callback: CallbackQuery, state: FSMContext, s
     if callback.from_user.id not in settings.admin_id_list:
         await callback.answer("Ruxsat yo'q", show_alert=True)
         return
-    
+
     count = await get_questions_count(session)
-    
+
     await state.set_state(AdminQuestionsStates.confirm_delete)
     await _safe_edit(
         callback.message,
@@ -501,9 +503,9 @@ async def confirm_delete_questions_handler(
     if callback.from_user.id not in settings.admin_id_list:
         await callback.answer("Ruxsat yo'q", show_alert=True)
         return
-    
+
     await delete_all_questions(session)
-    
+
     await _safe_edit(
         callback.message,
         text="✅ Barcha savollar o'chirildi.",
@@ -529,20 +531,19 @@ async def cancel_delete_questions_handler(
 
 # ==================== TEST FAOLLASHTIRISH ====================
 
-
 @router.callback_query(F.data == "confirm_activate")
 async def confirm_activate_handler(
     callback: CallbackQuery,
     state: FSMContext,
-    session: AsyncSession,  # ✅ session qo'shildi
+    session: AsyncSession,
 ) -> None:
     if callback.from_user.id not in settings.admin_id_list:
         await callback.answer("Ruxsat yo'q", show_alert=True)
         return
 
-    set_test_active(True)
+    # FIX #1: Endi DB ga ham yoziladi — restart safe.
+    await test_state.set_test_active(True)
 
-    # ✅ Foydalanuvchilarga xabar yuborish (faqat limit tugamaganlarga)
     registered_users = await get_registered_users(session)
     test_settings = await get_test_settings(session)
     daily_limit = 1
@@ -557,7 +558,6 @@ async def confirm_activate_handler(
     skipped_count = 0
 
     for user in registered_users:
-        # Limit tekshirish
         today_attempts = await get_user_attempt_count_today(session, user.id)
 
         if today_attempts >= daily_limit:
@@ -578,6 +578,10 @@ async def confirm_activate_handler(
         except Exception as e:
             logger.warning(f"Foydalanuvchiga xabar yuborib bo'lmadi {user.telegram_id}: {e}")
 
+        # FIX #12: Broadcast throttle — Telegram flood limit'ga urmaslik uchun.
+        # 100 foydalanuvchi bo'lsa 5 soniya kutish (0.05 * 100) — qabul qilinadi.
+        await asyncio.sleep(_BROADCAST_INTERVAL)
+
     await _safe_edit(
         callback.message,
         text=f"✅ Test faollashtirildi!\n\n"
@@ -593,9 +597,10 @@ async def deactivate_test_handler(callback: CallbackQuery, state: FSMContext) ->
     if callback.from_user.id not in settings.admin_id_list:
         await callback.answer("Ruxsat yo'q", show_alert=True)
         return
-    
-    set_test_active(False)
-    
+
+    # FIX #1: DB ga yoziladi.
+    await test_state.set_test_active(False)
+
     await _safe_edit(
         callback.message,
         text="🛑 Test to'xtatildi.",
@@ -664,8 +669,7 @@ async def _show_results_page(message: Message, session: AsyncSession, offset: in
     if not rows:
         await _safe_edit(
             message,
-            text="📊 Natijalar ro'yxati\n\n"
-            "Hozircha test attempts mavjud emas.",
+            text="📊 Natijalar ro'yxati\n\nHozircha test attempts mavjud emas.",
             reply_markup=results_menu(),
         )
         return
@@ -728,8 +732,6 @@ async def results_page_handler(
 
 @router.callback_query(F.data == "export_all_results")
 async def export_all_results_handler(callback: CallbackQuery) -> None:
-    """Admin qo'lda eksport: barcha foydalanuvchilar natijalarini .docx
-    qilib yuboradi. WIPE BAJARMAYDI — faqat hisobot faylini yuboradi."""
     if callback.from_user.id not in settings.admin_id_list:
         await callback.answer("Ruxsat yo'q", show_alert=True)
         return
@@ -761,7 +763,6 @@ async def export_all_results_handler(callback: CallbackQuery) -> None:
         logger.exception("Hisobot yuborilmadi")
         await callback.message.answer("❌ Hisobot yuborishda xatolik.")
     finally:
-        # Qo'lda eksport wipe'siz — yuborilgach faylni o'chiramiz.
         try:
             report_path.unlink(missing_ok=True)
         except OSError:
@@ -959,21 +960,21 @@ async def zip_audios_handler(callback: CallbackQuery) -> None:
     if callback.from_user.id not in settings.admin_id_list:
         await callback.answer("Ruxsat yo'q", show_alert=True)
         return
-    
+
     audios_dir = Path(__file__).resolve().parent.parent.parent / "data" / "audios"
-    
+
     if not audios_dir.exists() or not any(audios_dir.iterdir()):
         await callback.answer("Audio fayllar topilmadi!", show_alert=True)
         return
-    
+
     zip_path = Path(__file__).resolve().parent.parent.parent / "data" / "exports" / "all_audios.zip"
     zip_path.parent.mkdir(parents=True, exist_ok=True)
-    
+
     with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
         for file_path in audios_dir.rglob("*"):
             if file_path.is_file():
                 zipf.write(file_path, file_path.relative_to(audios_dir))
-    
+
     await callback.message.answer_document(
         FSInputFile(zip_path),
         caption="📦 Barcha audio fayllar",
@@ -994,8 +995,7 @@ async def cleanup_warning(callback: CallbackQuery) -> None:
         text="🧹 <b>Eski ma'lumotlarni tozalash</b>\n\n"
         "Quyidagi ishlar bajariladi:\n"
         "• <b>30 daqiqadan</b> ko'p 'processing' da tiqilib qolgan "
-        "attemptlar <b>active</b> ga qaytariladi (foydalanuvchi "
-        "testni davom ettira oladi)\n"
+        "attemptlar <b>active</b> ga qaytariladi\n"
         "• <b>30 kundan</b> eski attemptlar, ularning javoblari va "
         "audio fayllari o'chiriladi\n"
         "• Hech qanday javobga bog'lanmagan audio fayllar o'chiriladi\n\n"
@@ -1051,7 +1051,6 @@ async def back_to_admin_handler(callback: CallbackQuery, state: FSMContext) -> N
             reply_markup=admin_menu(),
         )
     except Exception:
-        # Agar xabar o'zgarmasa, yangi xabar yuborish
         await callback.message.answer(
             "👋 Admin panelga xush kelibsiz.",
             reply_markup=admin_menu(),
@@ -1060,35 +1059,8 @@ async def back_to_admin_handler(callback: CallbackQuery, state: FSMContext) -> N
     try:
         await callback.answer()
     except Exception:
-        pass  # Eski query bo'lsa e'tibor bermaymiz
+        pass
 
-
-@router.callback_query(F.data == "test_access")
-async def test_access_back_handler(callback: CallbackQuery, state: FSMContext) -> None:
-    """Test access menyusiga qaytish."""
-    if callback.from_user.id not in settings.admin_id_list:
-        await callback.answer("Ruxsat yo'q", show_alert=True)
-        return
-
-    await state.set_state(AdminTestAccessStates.menu)
-
-    # Hozirgi sozlamalarni olish
-    from app.database.database import SessionLocal
-    async with SessionLocal() as session:
-        test_settings = await get_test_settings(session)
-
-    current_mode = "Kunlik" if test_settings and test_settings.test_mode == "daily" else "VIP"
-    current_limit = test_settings.vip_limit if test_settings else 1
-
-    await _safe_edit(
-        callback.message,
-        text=f"🚪 Test kirish sozlamalari\n\n"
-        f"Hozirgi rejim: {current_mode}\n"
-        f"VIP limit: {current_limit} ta/kun\n\n"
-        f"Rejimni tanlang:",
-        reply_markup=test_access_menu(),
-    )
-    await callback.answer()
 
 # ==================== RESET DB ====================
 

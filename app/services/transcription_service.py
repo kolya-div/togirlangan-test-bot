@@ -85,18 +85,23 @@ def _detect_mime_type(audio_path: Path) -> str:
 async def _transcribe_with_gemini(audio_path: Path) -> str:
     from google import genai
 
-    if not settings.gemini_api_key:
+    # Multi-key rotation: round-robin across available keys
+    from app.services.evaluation_service import _next_gemini_key
+    api_key = await _next_gemini_key()
+    if not api_key:
         raise RuntimeError("GEMINI_API_KEY sozlanmagan")
 
-    await wait_gemini()  # Rate limit — 4 soniya kutish
+    await wait_gemini()
 
-    client = genai.Client(api_key=settings.gemini_api_key)
+    client = genai.Client(api_key=api_key)
 
     audio_bytes = audio_path.read_bytes()
     audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
     mime_type = _detect_mime_type(audio_path)
 
-    model = getattr(settings, "gemini_stt_model", "gemini-3.6-flash")
+    # FIX #4: gemini-3.6-flash mavjud emas → gemini-1.5-flash ishlatiladi.
+    # config.py da ham to'g'rilanishi kerak.
+    model = getattr(settings, "gemini_stt_model", "gemini-1.5-flash")
 
     response = await asyncio.to_thread(
         client.models.generate_content,
@@ -126,7 +131,7 @@ async def _transcribe_with_groq(audio_path: Path) -> str:
     if not settings.groq_api_key:
         raise RuntimeError("GROQ_API_KEY sozlanmagan")
 
-    await wait_groq()  # Rate limit — 2 soniya kutish
+    await wait_groq()
 
     client = AsyncGroq(
         api_key=settings.groq_api_key,
@@ -145,7 +150,7 @@ async def _transcribe_with_groq(audio_path: Path) -> str:
 
 
 async def _try_provider(name: str, fn, audio_path: Path) -> str:
-    """Bitta providerda MAX_RETRIES marta urinadi. Rate limit va timeout uchun maxsus."""
+    """Bitta providerda MAX_RETRIES marta urinadi."""
     last_error = None
     for attempt in range(MAX_RETRIES):
         try:
@@ -173,7 +178,6 @@ async def _try_provider(name: str, fn, audio_path: Path) -> str:
             last_error = e
             err_str = str(e).lower()
 
-            # Rate limit (429) — uzoqroq kutish
             if any(kw in err_str for kw in ["429", "rate limit", "quota", "too many requests"]):
                 delay = RATE_LIMIT_DELAY * (attempt + 1)
                 logger.warning(
@@ -183,7 +187,6 @@ async def _try_provider(name: str, fn, audio_path: Path) -> str:
                 await asyncio.sleep(delay)
                 continue
 
-            # Auth/xato — qayta urinmaslik
             if any(kw in err_str for kw in ["400", "invalid", "unsupported", "auth"]):
                 raise RuntimeError(f"Transkripsiya xatosi ({name}): {e}") from None
 
@@ -200,8 +203,7 @@ async def _try_provider(name: str, fn, audio_path: Path) -> str:
 
 
 def _get_provider_chain() -> list[tuple[str, callable]]:
-    """Asosiy provider birinchi, keyin fallback.
-    Gemini → Groq yoki Groq → Gemini tartibida."""
+    """Asosiy provider birinchi, keyin fallback."""
     primary = getattr(settings, "stt_provider", "gemini")
     chain = []
     if primary == "gemini":
@@ -242,15 +244,20 @@ async def transcribe_audio(audio_path: str | Path) -> str:
 
 
 async def transcribe_audio_file(file_id: str, bot, download_dir: str = "data/audios") -> str:
-    from aiogram import Bot
-
     download_dir = Path(download_dir)
     download_dir.mkdir(parents=True, exist_ok=True)
 
-    file_path = download_dir / f"{file_id}.ogg"
+    # FIX #5: Avval har doim .ogg kengaytmasi ishlatilardi —
+    # audio (mp3, m4a va b.) uchun MIME type noto'g'ri aniqlanardi.
+    # Endi Telegram'dan haqiqiy fayl yo'li olinib, uning kengaytmasi ishlatiladi.
+    file = await bot.get_file(file_id)
+    original_ext = Path(file.file_path).suffix if file.file_path else ".ogg"
+    if not original_ext or original_ext not in SUPPORTED_AUDIO_EXTENSIONS:
+        original_ext = ".ogg"  # Fallback — voice xabar odatda .oga/.ogg
+
+    file_path = download_dir / f"{file_id}{original_ext}"
 
     try:
-        file = await bot.get_file(file_id)
         await bot.download_file(file.file_path, destination=file_path)
 
         _validate_audio_file(file_path)

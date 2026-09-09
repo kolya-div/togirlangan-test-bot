@@ -8,7 +8,6 @@ class Settings(BaseSettings):
     bot_token: str
     admin_ids: str
 
-    # Loyiha faqat PostgreSQL (asyncpg) bilan ishlaydi.
     database_url: str = "postgresql+asyncpg://postgres:123@localhost:5432/turkish"
     webapp_url: str = "http://localhost:8000"
 
@@ -17,7 +16,11 @@ class Settings(BaseSettings):
     gemini_api_key: str | None = None
     # Bir nechta Gemini kaliti (vergul bilan): "key1,key2,key3"
     gemini_api_keys: str | None = None
-    gemini_stt_model: str = "gemini-3.6-flash"
+
+    # FIX #4: "gemini-3.6-flash" mavjud emas — to'g'ri model nomi ishlatiladi.
+    # Mavjud variantlar: "gemini-1.5-flash", "gemini-2.0-flash"
+    gemini_stt_model: str = "gemini-1.5-flash"
+
     groq_api_key: str | None = None
     groq_stt_model: str = "whisper-large-v3-turbo"
 
@@ -35,7 +38,7 @@ class Settings(BaseSettings):
     max_audio_size_mb: int = 50
 
     # CORS sozlamalari
-    cors_origins: str = "*"  # "http://localhost:3000,https://yourdomain.com" kabi
+    cors_origins: str = "*"
 
     # Logging sozlamalari
     log_level: str = "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
@@ -70,15 +73,14 @@ class Settings(BaseSettings):
         """Barcha Gemini kalitlari ro'yxati.
 
         Avval `GEMINI_API_KEYS` (vergul bilan ajratilgan) olinadi,
-        aks holda eski `GEMINI_API_KEY` ishlatiladi. Takrorlanuvchi va
-        bo'sh qiymatlar olib tashlanadi.
+        aks holda eski `GEMINI_API_KEY` ishlatiladi.
         """
         keys: list[str] = []
         if self.gemini_api_keys:
             keys = [k.strip() for k in self.gemini_api_keys.split(",") if k.strip()]
         if not keys and self.gemini_api_key:
             keys = [self.gemini_api_key.strip()]
-        # takrorlanuvchilarni olib tashlash
+        # Takrorlanuvchilarni olib tashlash
         seen: set[str] = set()
         unique: list[str] = []
         for k in keys:

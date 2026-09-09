@@ -70,6 +70,20 @@ async def process_phone(
     message: Message,
     state: FSMContext,
 ) -> None:
+    # FIX #8: Kontakt egasi tekshiriladi.
+    # Telegram boshqa shaxsning kontaktini yuborishga ruxsat beradi.
+    # contact.user_id == None bo'lishi ham mumkin (telefon daftaridagi kontakt).
+    if (
+        message.contact.user_id is not None
+        and message.contact.user_id != message.from_user.id
+    ):
+        await message.answer(
+            "❌ Iltimos, faqat o'zingizning telefon raqamingizni yuboring.\n\n"
+            "«Telefon raqamni ulashish» tugmasini bosing:",
+            reply_markup=phone_keyboard(),
+        )
+        return
+
     data = await state.get_data()
     full_name = data.get("full_name")
     phone = message.contact.phone_number

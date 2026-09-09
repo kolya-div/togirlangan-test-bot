@@ -6,12 +6,12 @@ services:
     container_name: turkish-db
     restart: unless-stopped
     command:
-      # NullPool arxitekturasi: har sessiya alohida connection.
-      # 100 user × 2 session + 50 upload + 5 report + 10 zahira = ~165.
-      # max_connections=300 — yetarli zahira bilan.
+      # Connection pool: pool_size=20, max_overflow=20 = 40 max connections.
+      # Bot + report workers + webapp requests = ~40 max.
+      # max_connections=100 — yetarli zahira bilan (40 pool + admin queries + pg_stat).
       - "postgres"
       - "-c"
-      - "max_connections=300"
+      - "max_connections=100"
       # TCP keepalive — uzun querylar da connection uzilmasligi uchun
       - "-c"
       - "tcp_keepalives_idle=60"
