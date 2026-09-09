@@ -231,8 +231,9 @@ export default function Results({ result, resultsData, loading, onClose, attempt
 
             <div className="footer">
                 <div className="footer-logo">🎓</div>
-                <div className="footer-name">Evren VİP Konuşma Bot</div>
-                <a href="#" className="footer-link">@evrenvip_bot</a>
+                <div className="footer-name">Step Academy</div>
+                <a href="#" className="footer-link">@stepacademy</a>
+                <div className="footer-dev">dasturchi: @Kpakona</div>
             </div>
         </div>
     )

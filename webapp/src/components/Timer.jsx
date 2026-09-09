@@ -6,8 +6,8 @@ export default function Timer({ timeLeft, phase, formatTime, prepSeconds, answer
     const dashOffset = 339.292 - (339.292 * percentage) / 100
 
     return (
-        <div className="timer-section">
-            <div className={`timer-circle ${isPrep ? 'prep' : ''}`}>
+        <div className={`timer-section ${isPrep ? 'prep' : 'rec'}`}>
+            <div className={`timer-circle ${isPrep ? 'prep' : 'rec'}`}>
                 <svg
                     width="120"
                     height="120"
@@ -19,7 +19,7 @@ export default function Timer({ timeLeft, phase, formatTime, prepSeconds, answer
                         cy="60"
                         r="54"
                         fill="none"
-                        stroke={isPrep ? '#FEFCBF' : '#FED7D7'}
+                        stroke="#1E241F"
                         strokeWidth="4"
                     />
                     <circle
@@ -27,7 +27,7 @@ export default function Timer({ timeLeft, phase, formatTime, prepSeconds, answer
                         cy="60"
                         r="54"
                         fill="none"
-                        stroke={isPrep ? '#F6AD55' : '#E53E3E'}
+                        stroke={isPrep ? '#4ADE80' : '#22C55E'}
                         strokeWidth="4"
                         strokeLinecap="round"
                         strokeDasharray="339.292"

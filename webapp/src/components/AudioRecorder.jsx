@@ -245,7 +245,7 @@ export default function AudioRecorder({
                 width: 8,
                 height: 8,
                 borderRadius: '50%',
-                background: '#ef4444',
+                background: '#22C55E',
                 animation: 'pulse 1s infinite',
             }} />
             <span style={{ fontSize: 14, color: 'var(--text-secondary)', fontWeight: 600 }}>
