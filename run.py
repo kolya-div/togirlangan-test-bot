@@ -21,6 +21,12 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
+# Windows'da default ProactorEventLoop asyncpg bilan mos kelmaydi
+# ("connection was closed in the middle of operation" / WinError 64).
+# SelectorEventLoop asyncpg + SQLAlchemy uchun barqaror ishlaydi.
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 import uvicorn
 from dotenv import load_dotenv
 
@@ -202,6 +208,7 @@ def start_vite():
 async def main():
     from app.main import app
     from app.bot.bot import bot, dp
+    from app.bot.handlers import handlers_router
     from app.database.database import init_db
     from app.services.report_worker import start_report_workers, stop_report_workers
     from app.services.ai_resource_manager import setup_providers
@@ -259,7 +266,10 @@ async def main():
     logger.info("✅ FastAPI tayyor: http://localhost:8000")
     logger.info("🤖 Bot ishga tushmoqda...")
 
-    # 8. Bot polling — asosiy loopni bloklab turadi
+    # 8. Bot handlerlarini ulash (oldin start_bot() da bor edi, qayta ixtiro bo'lmasin)
+    dp.include_router(handlers_router)
+
+    # 9. Bot polling — asosiy loopni bloklab turadi
     try:
         await dp.start_polling(bot)
     finally:
