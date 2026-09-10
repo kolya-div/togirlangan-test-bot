@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState, useCallback } from 'react'
+import { useRef, useEffect, useCallback } from 'react'
 import { uploadAnswer } from '../api.js'
 
 const MIN_AUDIO_BYTES = 1024
@@ -42,14 +42,7 @@ export default function AudioRecorder({
     const stoppedRef = useRef(false)
     const mountedRef = useRef(false)
 
-    const [recordingTime, setRecordingTime] = useState(0)
-    const timerRef = useRef(null)
-
     const cleanup = useCallback(() => {
-        if (timerRef.current) {
-            clearInterval(timerRef.current)
-            timerRef.current = null
-        }
         cleanupStream(streamRef.current)
         streamRef.current = null
     }, [])
@@ -196,12 +189,6 @@ export default function AudioRecorder({
 
         try {
             recorder.start(1000)
-            setRecordingTime(0)
-            timerRef.current = setInterval(() => {
-                if (mountedRef.current) {
-                    setRecordingTime(t => t + 1)
-                }
-            }, 1000)
         } catch (_) {
             failAndSkip('Yozishni boshlab bo\'lmadi')
         }
@@ -215,11 +202,6 @@ export default function AudioRecorder({
     const stopRecording = useCallback(() => {
         if (stoppedRef.current) return
         stoppedRef.current = true
-
-        if (timerRef.current) {
-            clearInterval(timerRef.current)
-            timerRef.current = null
-        }
 
         const recorder = mediaRecorder.current
         if (recorder && recorder.state !== 'inactive') {
@@ -245,12 +227,9 @@ export default function AudioRecorder({
                 width: 8,
                 height: 8,
                 borderRadius: '50%',
-                background: '#22C55E',
+                background: '#16A34A',
                 animation: 'pulse 1s infinite',
             }} />
-            <span style={{ fontSize: 14, color: 'var(--text-secondary)', fontWeight: 600 }}>
-                {recordingTime}s
-            </span>
             <button className="btn btn-danger" onClick={stopRecording}>
                 To'xtatish
             </button>

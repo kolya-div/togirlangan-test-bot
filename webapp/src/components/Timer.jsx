@@ -19,7 +19,7 @@ export default function Timer({ timeLeft, phase, formatTime, prepSeconds, answer
                         cy="60"
                         r="54"
                         fill="none"
-                        stroke="#1E241F"
+                        stroke="#D4DDD5"
                         strokeWidth="4"
                     />
                     <circle
@@ -27,7 +27,7 @@ export default function Timer({ timeLeft, phase, formatTime, prepSeconds, answer
                         cy="60"
                         r="54"
                         fill="none"
-                        stroke={isPrep ? '#4ADE80' : '#22C55E'}
+                        stroke={isPrep ? '#22C55E' : '#16A34A'}
                         strokeWidth="4"
                         strokeLinecap="round"
                         strokeDasharray="339.292"

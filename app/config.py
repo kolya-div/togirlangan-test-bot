@@ -17,9 +17,10 @@ class Settings(BaseSettings):
     # Bir nechta Gemini kaliti (vergul bilan): "key1,key2,key3"
     gemini_api_keys: str | None = None
 
-    # FIX #4: "gemini-3.6-flash" mavjud emas — to'g'ri model nomi ishlatiladi.
-    # Mavjud variantlar: "gemini-1.5-flash", "gemini-2.0-flash"
-    gemini_stt_model: str = "gemini-1.5-flash"
+    # FIX: eski modellar (gemini-1.5-flash/2.0-flash/2.5-flash) yangi
+    # kalitlarda yopilgan — Google API joriy kalit uchun gemini-3.6-flash
+    # ni tavsiya qiladi.
+    gemini_stt_model: str = "gemini-3.6-flash"
 
     groq_api_key: str | None = None
     groq_stt_model: str = "whisper-large-v3-turbo"

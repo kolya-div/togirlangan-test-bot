@@ -99,9 +99,9 @@ async def _transcribe_with_gemini(audio_path: Path) -> str:
     audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
     mime_type = _detect_mime_type(audio_path)
 
-    # FIX #4: gemini-3.6-flash mavjud emas → gemini-1.5-flash ishlatiladi.
-    # config.py da ham to'g'rilanishi kerak.
-    model = getattr(settings, "gemini_stt_model", "gemini-1.5-flash")
+    # FIX: eski modellar yangi kalitlarda yopilgan → config.py dagi
+    # ishlaydigan model ishlatiladi (default: gemini-3.6-flash).
+    model = getattr(settings, "gemini_stt_model", "gemini-3.6-flash")
 
     response = await asyncio.to_thread(
         client.models.generate_content,

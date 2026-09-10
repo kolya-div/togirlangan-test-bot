@@ -6,7 +6,7 @@ export default function QuestionCard({ question, questionNumber, totalQuestions,
     const rowsCount = Math.max(pros.length, cons.length)
 
     return (
-        <div>
+        <div className="question-card">
             <div className="question-panel">
                 <span className="q-label">Soru #{questionNumber}</span>
                 <div className="question-progress-bar">
