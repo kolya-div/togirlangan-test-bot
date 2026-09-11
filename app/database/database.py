@@ -14,15 +14,17 @@ class Base(DeclarativeBase):
 
 
 # Connection pool: NullPool o'rniga real pool ishlatiladi.
-# Pool size=20, max_overflow=20 — 40 ta bir vaqtdagi connection.
-# 100+ user uchun yetarli: webapp (20) + report workers (5) + bot (10) + zahira (5).
-# NullPool har safar yangi TCP connection ochardi (~500ms overhead/request),
-# real pool esa connection'larni qayta ishlatadi.
+# Pool size + max_overflow — 100+ user uchun yetarli zaxira.
+# webapp (30) + report workers (10) + bot (15) + zahira (15) = ~60 max.
+# O'lchamlar database.py config'da: DB_POOL_SIZE / DB_MAX_OVERFLOW.
+pool_size = max(20, getattr(settings, "db_pool_size", 30))
+max_overflow = max(20, getattr(settings, "db_max_overflow", 30))
+
 engine = create_async_engine(
     settings.database_url,
     echo=False,
-    pool_size=20,
-    max_overflow=20,
+    pool_size=pool_size,
+    max_overflow=max_overflow,
     pool_timeout=30,
     pool_pre_ping=True,  # Uzilgan connection'larni avtomatik aniqlash
     pool_recycle=1800,   # 30 daqiqada eski connection'larni yangilash

@@ -38,15 +38,16 @@ def _get_process_fn():
     from app.services.report_service import _process_attempt_and_report_inner
     return _process_attempt_and_report_inner
 
-# Worker soni: Gemini 15 RPM + Groq 30 RPM = ~45 RPM jami.
-# Har bir worker ~2 AI call (transcription + eval) = ~10s/job.
-# 5 worker = bir vaqtda 5 ta job, ~50s per batch = ~60 jobs/min.
-# 100 user finish qilsa: 100/60 = ~1.7 daqiqa — yetarli.
-REPORT_WORKERS = 5
+# Worker soni config'dan sozlanadi (default 8):
+# Gemini paid: 300 RPM × N key = juda tez.
+# 8 worker × ~10s/job = ~48 jobs/dak — 100 user/100 jobs = ~2 daqiqa.
+from app.config import settings as _settings
 
-# Queue xavfsizlik chegarasi — 100+ user uchun yetarli.
-# 500 ta job: 5 worker × 2min/job batch = 25 jobs/min → 500/25 = 20 daqiqa buffer.
-MAX_QUEUE_SIZE = 500
+REPORT_WORKERS = max(5, getattr(_settings, "report_workers", 8))
+
+# Queue xavfsizlik chegarasi — 100+ user uchun yetarli (500 job).
+# Gemini paid 300 RPM → 8 worker × ~6s/job = ~80 jobs/min → 500/80 ≈ 6 min buffer.
+MAX_QUEUE_SIZE = 1000
 
 # Queue to'lib ketganida reject qilish vaqti
 ENQUEUE_TIMEOUT = 5.0

@@ -10,10 +10,10 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Gemini bepul: ~15 RPM per key = har 4 soniyada 1 ta request per key.
-# Bir nechta kalit bo'lsa, umumiy RPM = 15 × kalit_soni.
-# Rate limiter dynamically hisoblaydi.
-GEMINI_RPM_PER_KEY = 15
+# Gemini: RPM config.py dan olinadi (free=15, paid=300+).
+# Free: ~15 RPM per key = har 4 soniyada 1 ta request per key.
+# Paid (Tier 1+): 300 RPM per key — AI Studio'dan aniqlang.
+# Bir nechta kalit bo'lsa, umumiy RPM = GEMINI_RPM_PER_KEY × kalit_soni.
 GROQ_MIN_INTERVAL = 2.0    # soniya (30 RPM = 60/30 = 2s)
 
 _last_gemini_call = 0.0
@@ -23,10 +23,11 @@ _groq_lock = asyncio.Lock()
 
 
 def _gemini_interval() -> float:
-    """Gemini uchun interval — kalitlar soniga qarab dinamik."""
+    """Gemini uchun interval — RPM konfiguratsiyasiga qarab dinamik."""
     from app.config import settings
     key_count = max(1, len(settings.gemini_keys_list))
-    total_rpm = GEMINI_RPM_PER_KEY * key_count
+    rpm_per_key = max(1, getattr(settings, "gemini_rpm_per_key", 15))
+    total_rpm = rpm_per_key * key_count
     return 60.0 / total_rpm
 
 

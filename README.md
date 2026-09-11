@@ -48,16 +48,102 @@ python run.py
 # → FastAPI (localhost:8000), Ngrok tunnel, Telegram bot avtomatik boshlanadi
 ```
 
-`.env` muhim maydonlari:
+## .env Sozlamalari (To'liq)
 
-| Kalit | Izoh |
-|-------|------|
-| `BOT_TOKEN` | @BotFather dan olinadi |
-| `ADMIN_IDS` | Admin Telegram ID'lari (vergul bilan) |
-| `DATABASE_URL` | `postgresql+asyncpg://user:pass@host:5432/dbname` |
-| `STT_PROVIDER` | `groq` / `gemini` — ovozni matnga aylantiruvchi |
-| `GROQ_API_KEY` | console.groq.com/keys |
-| `NGROK_AUTHTOKEN` | dashboard.ngrok.com |
+### 📌 Majburiy sozlamalar
+
+| Kalit | Izoh | Misol |
+|-------|------|-------|
+| `BOT_TOKEN` | @BotFather dan olinadi | `123456789:AAAbBcC...` |
+| `ADMIN_IDS` | Admin Telegram ID'lari (vergul bilan) | `123456789,987654321` |
+| `DATABASE_URL` | PostgreSQL ulanish URL | `postgresql+asyncpg://postgres:123@localhost:5432/turkish` |
+
+### 🌐 WebApp & Tunnel
+
+| Kalit | Default | Izoh |
+|-------|---------|------|
+| `WEBAPP_URL` | `http://localhost:8000` | WebApp URL (Ngrok avtomatik yangilaydi) |
+| `NGROK_AUTHTOKEN` | bo'sh | dashboard.ngrok.com dan olinadi |
+
+### 🎙️ STT (Ovoz → Matn)
+
+| Kalit | Default | Izoh |
+|-------|---------|------|
+| `STT_PROVIDER` | `gemini` | Provider: `gemini`, `groq`, `openai` |
+| `GEMINI_API_KEY` | bo'sh | Bitta Gemini kaliti |
+| `GEMINI_API_KEYS` | bo'sh | Bir nechta Gemini kaliti (vergul bilan) |
+| `GEMINI_STT_MODEL` | `gemini-3.6-flash` | Gemini STT modeli |
+| `GROQ_API_KEY` | bo'sh | Groq kaliti |
+| `GROQ_STT_MODEL` | `whisper-large-v3-turbo` | Groq STT modeli |
+
+### 🤖 AI Baholash
+
+| Kalit | Default | Izoh |
+|-------|---------|------|
+| `AI_PROVIDER` | `openai` | Baholash provideri: `openai`, `groq` |
+| `OPENAI_API_KEY` | bo'sh | OpenAI kaliti (tavsiya: gpt-4o-mini) |
+| `OPENAI_MODEL` | `gpt-4o-mini` | OpenAI baholash modeli |
+| `GROQ_CHAT_MODEL` | `openai/gpt-oss-120b` | Groq chat modeli |
+| `GROQ_VISION_MODEL` | `qwen/qwen3.6-27b` | Groq vision modeli (docx uchun) |
+
+### ⚡ Performance sozlamalari (100+ user uchun)
+
+| Kalit | Default | Izoh |
+|-------|---------|------|
+| `GEMINI_RPM_PER_KEY` | `300` | Gemini requests per minute (paid tier) |
+| `DB_POOL_SIZE` | `30` | PostgreSQL connection pool hajmi |
+| `DB_MAX_OVERFLOW` | `30` | Qo'shimcha connectionlar |
+| `REPORT_WORKERS` | `8` | Parallel report workerlar soni |
+| `UPLOAD_SEMAPHORE` | `100` | Bir vaqtda audio upload limiti |
+| `TELEGRAM_RATE_PER_SECOND` | `30` | Telegram API yuborish tezligi |
+
+### 📁 Fayl sozlamalari
+
+| Kalit | Default | Izoh |
+|-------|---------|------|
+| `UPLOAD_DIR` | `data/audios` | Audio/rasm papkasi |
+| `MAX_AUDIO_SIZE_MB` | `50` | Maksimal audio hajm (MB) |
+
+### 🌍 CORS & Logging
+
+| Kalit | Default | Izoh |
+|-------|---------|------|
+| `CORS_ORIGINS` | `*` | Ruxsat etilgan domenlar (vergul bilan) |
+| `LOG_LEVEL` | `INFO` | Log darajasi: DEBUG, INFO, WARNING, ERROR |
+
+## Gemini Paid (Pro) API — 100 User uchun optimallash
+
+100 concurrent user uchun **Gemini paid (Pro) API** talab qilinadi:
+- **Free tier**: 15 RPM har kalit → 3 kalit bilan 45 RPM (yetmaydi)
+- **Paid Tier 1**: 300+ RPM har kalit → 1 kalit bilan yetadi
+
+Sozlash:
+1. Gemini AI Studio → Dashboard → Rate limits tekshiring
+2. `.env` da `GEMINI_RPM_PER_KEY=300` qo'ying (yoki haqiqiy limitni kiriting)
+
+## PostgreSQL sozlash
+
+App PostgreSQL bilan ishlaydi. Yangi baza yaratish va jadvallarni tuzish avtomatik (`init_db`).
+
+```bash
+psql -U postgres -h localhost -c "CREATE DATABASE turkish;"
+```
+
+Keyin `.env` da:
+```
+DATABASE_URL=postgresql+asyncpg://postgres:123@localhost:5432/turkish
+```
+
+100+ user uchun PostgreSQL sozlamalari:
+```sql
+-- postgresql.conf
+max_connections = 200
+statement_timeout = 300000
+idle_in_transaction_session_timeout = 60000
+tcp_keepalives_idle = 60
+tcp_keepalives_interval = 10
+tcp_keepalives_count = 6
+```
 
 ## Admin panel
 
@@ -87,16 +173,12 @@ scripts/         # foydali skriptlar
 run.py           # asosiy ishga tushirish nuqtasi
 ```
 
-## Postgresql'ga o'tkazish
+## 100 Concurrent User uchun resurs talablari
 
-App PostgreSQL bilan ishlaydi. Yangi baza yaratish va jadvallarni tuzish avtomatik (`init_db`).
-
-```bash
-psql -U postgres -h localhost -c "CREATE DATABASE turkish;"
-```
-
-Keyin `.env` da:
-
-```
-DATABASE_URL=postgresql+asyncpg://postgres:123@localhost:5432/turkish
-```
+| Resurs | Min | Tavsiya |
+|--------|-----|---------|
+| RAM | 2 GB | 4 GB |
+| CPU | 2 yadro | 4 yadro |
+| PostgreSQL connections | 60 | 200 |
+| Gemini RPM | 300 | 600+ |
+| Telegram msg/s | 30 | 30 |

@@ -30,9 +30,13 @@ MAX_MESSAGE_LEN = 4000
 # Umumiy maksimal ball — qat'iy 75 (docx ballari faqat vazn sifatida)
 MAX_TOTAL_POINTS = 75
 
-# 100 odam uchun: Gemini 15 RPM = har 4 soniyada 1 ta call
-# 5 ta concurrent task × 4s = 20s da 5 ta call → yetarli
-_REPORT_SEMAPHORE = asyncio.Semaphore(5)
+# 100 user uchun: Gemini paid 300 RPM = ko'plab concurrent call.
+# Workerlar o'zi cheklaydi (REPORT_WORKERS), lekin semaphore ham
+# ortiqcha parallel AI call'larni oldini oladi.
+from app.config import settings as _rsettings
+_REPORT_SEMAPHORE = asyncio.Semaphore(
+    max(10, getattr(_rsettings, "report_workers", 8)) * 2
+)
 
 
 async def process_attempt_and_report(attempt_id: int) -> None:

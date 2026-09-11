@@ -44,6 +44,28 @@ class Settings(BaseSettings):
     # Logging sozlamalari
     log_level: str = "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
 
+    # ── Paid (tier) konfiguratsiyasi ──
+    # Gemini API RPM (requests per minute). Free tier: 15 per key.
+    # Paid (Tier 1+): odatda 300+ — haqiqiy qiymatni AI Studio dan tekshiring.
+    gemini_rpm_per_key: int = 300
+
+    # Groq / OpenAI RPM — paid/tez-tez ishlatish darajasiga qarab sozlang
+    groq_rpm_per_key: int = 30
+    openai_rpm_per_key: int = 60
+
+    # DB connection pool
+    db_pool_size: int = 30
+    db_max_overflow: int = 30
+
+    # Report worker soni (100+ user uchun 8-10)
+    report_workers: int = 8
+
+    # Concurrent upload chegarasi (100 user uchun 100)
+    upload_semaphore: int = 100
+
+    # Telegram global yuborish tezligi (msg/s)
+    telegram_rate_per_second: float = 30.0
+
     @field_validator("database_url")
     @classmethod
     def validate_database_url(cls, v: str) -> str:
@@ -68,6 +90,13 @@ class Settings(BaseSettings):
             for item in self.admin_ids.split(",")
             if item.strip()
         ]
+
+    @property
+    def is_gemini_paid(self) -> bool:
+        """Gemini paid (billing) rejimda ishlayotganini bildiradi.
+        GEMINI_RPM_PER_KEY > 15 bo'lsa — paid rejim deb hisoblanadi.
+        """
+        return self.gemini_rpm_per_key > 15
 
     @property
     def gemini_keys_list(self) -> list[str]:

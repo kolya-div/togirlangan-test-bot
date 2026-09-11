@@ -39,7 +39,10 @@ STATUS_FINISHED = "finished"
 # Concurrent upload limit — 100 user bir vaqtda upload qilsa ham
 # server RAM'i cheklangan bo'lishi uchun. Har bir upload ~64KB buffer
 # ishlatadi (temp file ga yoziladi).
-_UPLOAD_SEMAPHORE = asyncio.Semaphore(50)
+# Light: config'dan olinadi (default 100).
+_UPLOAD_SEMAPHORE = asyncio.Semaphore(
+    max(50, getattr(settings, "upload_semaphore", 100))
+)
 _UPLOAD_CHUNK_SIZE = 64 * 1024  # 64KB — RAM'da minimal iz qoldiradi
 
 

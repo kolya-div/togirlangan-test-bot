@@ -24,7 +24,12 @@ import time
 logger = logging.getLogger(__name__)
 
 # ────────────── GLOBAL RATE LIMIT ──────────────
-TELEGRAM_RATE_PER_SECOND = 25.0
+# Telegram sog'lom limiti ~30 msg/s. Config'dan sozlanadi (default 30).
+from app.config import settings as _t_settings
+
+TELEGRAM_RATE_PER_SECOND = float(
+    max(5.0, getattr(_t_settings, "telegram_rate_per_second", 30.0))
+)
 _MIN_INTERVAL = 1.0 / TELEGRAM_RATE_PER_SECOND
 
 _lock = threading.Lock()

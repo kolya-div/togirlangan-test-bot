@@ -205,7 +205,9 @@ def setup_providers():
     from app.config import settings
 
     if getattr(settings, "gemini_api_key", None) or getattr(settings, "gemini_keys_list", None):
-        gemini_rpm = 15 * max(1, len(getattr(settings, "gemini_keys_list", []) or []))
+        gemini_rpm = getattr(settings, "gemini_rpm_per_key", 15) * max(
+            1, len(getattr(settings, "gemini_keys_list", []) or [])
+        )
         ai_manager.register_provider(ProviderConfig(
             name="gemini",
             rpm=gemini_rpm,
@@ -214,17 +216,19 @@ def setup_providers():
         ))
 
     if getattr(settings, "groq_api_key", None):
+        groq_rpm = getattr(settings, "groq_rpm_per_key", 30)
         ai_manager.register_provider(ProviderConfig(
             name="groq",
-            rpm=30,
+            rpm=groq_rpm,
             timeout=120.0,
             max_retries=3,
         ))
 
     if getattr(settings, "openai_api_key", None):
+        openai_rpm = getattr(settings, "openai_rpm_per_key", 60)
         ai_manager.register_provider(ProviderConfig(
             name="openai",
-            rpm=60,
+            rpm=openai_rpm,
             timeout=90.0,
             max_retries=2,
         ))
