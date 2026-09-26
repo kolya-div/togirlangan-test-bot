@@ -115,78 +115,63 @@ def start_ngrok():
     return False
 
 # ──────────────────────────────────────────
-# TELEGRAM BOT
+# KUNLIK FON VAZIFASI (00:00)
 # ──────────────────────────────────────────
-async def start_bot():
-    """Telegram botni ishga tushiradi."""
-    from app.bot.bot import bot, dp
-    from app.bot.handlers import handlers_router
-    from app.database.database import init_db
-
-    await init_db()
-    dp.include_router(handlers_router)
-
-    # Background task: har kuni 00:00 da limitni qaytarish
-    asyncio.create_task(daily_limit_reset_task())
-
-    await dp.start_polling(bot)
-
-
-async def daily_limit_reset_task():
-    """Har kuni 00:00 da test settings ni kunlik rejimga qaytaradi."""
-    from datetime import time
+async def _reset_daily_limit() -> None:
+    """Test settings ni kunlik rejimga qaytaradi (limit=1)."""
     from app.database.database import SessionLocal
     from app.database.repositories import create_or_update_test_settings
-    from app.utils.helpers import utcnow
 
-    while True:
-        now = utcnow()
-        tomorrow = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
-        seconds_until_midnight = (tomorrow - now).total_seconds()
-
-        logger.info(f"⏰ Limit qaytarish {seconds_until_midnight:.0f} soniyadan so'ng amalga oshadi.")
-
-        await asyncio.sleep(seconds_until_midnight)
-
-        try:
-            async with SessionLocal() as session:
-                await create_or_update_test_settings(session, "daily", 1)
-                logger.info("✅ Kunlik limit avtomatik qaytarildi (daily mode, limit=1)")
-        except Exception as e:
-            logger.error(f"❌ Limit qaytarishda xato: {e}")
+    try:
+        async with SessionLocal() as session:
+            await create_or_update_test_settings(session, "daily", 1)
+            logger.info("✅ Kunlik limit avtomatik qaytarildi (daily mode, limit=1)")
+    except Exception as e:
+        logger.error(f"❌ Limit qaytarishda xato: {e}")
 
 
-async def daily_export_wipe_task():
-    """Har kuni 00:00 da .docx hisobotni adminlarga yuborib, bazani
-    TO'LIQ tozalaydi (users, attempts, answers, questions, test_settings,
-    audio fayllar — 0 qoldirmaydi).
+async def _export_and_wipe() -> None:
+    """.docx hisobotni adminlarga yuborib, bazani TO'LIQ tozalaydi
+    (users, attempts, answers, questions, test_settings, audio fayllar).
 
     Xavfsizlik: wipe faqat adminlarning kamida bittasi hisobot faylini
     olgan taqdirda bajariladi (daily_export_wipe ichida kafolatlangan).
     """
     from app.services.daily_export_wipe import run_daily_export_and_wipe
-    from app.utils.helpers import utcnow
+
+    try:
+        result = await run_daily_export_and_wipe()
+        if result is None:
+            logger.error("⚠️ Kunlik eksport+wipe bajarilmadi (fayl adminlarga yuborilmagan bo'lishi mumkin).")
+        else:
+            logger.info("✅ Kunlik eksport+wipe tugallandi: %s", result)
+    except Exception as e:
+        logger.exception("❌ Kunlik eksport+wipe xato: %s", e)
+
+
+async def daily_midnight_task():
+    """Har kuni mahalliy vaqt (REPORT_TIMEZONE, default Toshkent) 00:00 da:
+    1. Word hisobotni adminlarga yuborib, bazani tozalaydi.
+    2. Keyin limitni kunlik rejimga qaytaradi.
+
+    Ikkalasi ketma-ket bajariladi — oldin alohida vazifalar bir vaqtda
+    uyg'onib, test_settings ustida poygaga kirishardi.
+    """
+    from app.utils.helpers import seconds_until_local_midnight
 
     while True:
-        now = utcnow()
-        tomorrow = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
-        seconds_until_midnight = (tomorrow - now).total_seconds()
-
+        seconds = seconds_until_local_midnight()
         logger.info(
-            f"🗓️ Kunlik eksport+wipe {seconds_until_midnight:.0f} soniyadan "
-            f"so'ng amalga oshadi."
+            f"🗓️ Kunlik hisobot {seconds:.0f} soniyadan so'ng "
+            f"({settings.report_timezone} 00:00) yuboriladi."
         )
+        await asyncio.sleep(seconds)
 
-        await asyncio.sleep(seconds_until_midnight)
+        await _export_and_wipe()
+        await _reset_daily_limit()
 
-        try:
-            result = await run_daily_export_and_wipe()
-            if result is None:
-                logger.error("⚠️ Kunlik eksport+wipe bajarilmadi (fayl adminlarga yuborilmagan bo'lishi mumkin).")
-            else:
-                logger.info("✅ Kunlik eksport+wipe tugallandi: %s", result)
-        except Exception as e:
-            logger.exception("❌ Kunlik eksport+wipe xato: %s", e)
+        # Bir xil yarim tunda ikki marta ishlamasligi uchun
+        await asyncio.sleep(60)
 
 
 # ──────────────────────────────────────────
@@ -372,11 +357,9 @@ async def main():
     # 3. Report workerlarni ishga tushirish (bitta loopda — pool safe)
     start_report_workers()
 
-    # 4. Kunlik fon vazifalari (har kuni 00:00):
-    #    - limitni kunlik rejimga qaytarish
-    #    - .docx hisobot yuborish va bazani to'liq tozalash
-    asyncio.create_task(daily_limit_reset_task())
-    asyncio.create_task(daily_export_wipe_task())
+    # 4. Kunlik fon vazifasi (har kuni mahalliy 00:00):
+    #    .docx hisobot yuborish + bazani tozalash, keyin limitni qaytarish
+    asyncio.create_task(daily_midnight_task())
 
     # 5. Cache cleanup task
     asyncio.create_task(cleanup_task(interval=300))  # 5 minutes
@@ -425,7 +408,7 @@ async def main():
     logger.info("✅ FastAPI tayyor: http://localhost:8000")
     logger.info("🤖 Bot ishga tushmoqda...")
 
-    # 10. Bot handlerlarini ulash (oldin start_bot() da bor edi, qayta ixtiro bo'lmasin)
+    # 10. Bot handlerlarini ulash
     dp.include_router(handlers_router)
 
     # 11. Bot polling — asosiy loopni bloklab turadi

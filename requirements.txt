@@ -19,3 +19,4 @@ psutil>=5.9
 python-dotenv>=1.0
 pyngrok>=7.0.0
 google-genai>=1.0.0
+tzdata>=2024.1
