@@ -245,6 +245,7 @@ async def main():
     from app.database.database import init_db
     from app.services.report_worker import start_report_workers, stop_report_workers
     from app.services.ai_resource_manager import setup_providers
+    from app.utils.cache import cleanup_task
 
     # 1. DB ni ishga tushirish
     await init_db()
@@ -261,14 +262,17 @@ async def main():
     asyncio.create_task(daily_limit_reset_task())
     asyncio.create_task(daily_export_wipe_task())
 
-    # 5. Vite frontendni ishga tushirish
+    # 5. Cache cleanup task
+    asyncio.create_task(cleanup_task(interval=300))  # 5 minutes
+
+    # 6. Vite frontendni ishga tushirish
     logger.info("🌐 Frontend (Vite) ishga tushmoqda...")
     start_vite()
 
-    # 5. Ngrok tunnelni ishga tushirish
+    # 7. Ngrok tunnelni ishga tushirish
     start_ngrok()
 
-    # 6. WebApp URL ni yangilash
+    # 8. WebApp URL ni yangilash
     if NGROK_PUBLIC_URL:
         try:
             settings.webapp_url = NGROK_PUBLIC_URL
@@ -279,7 +283,7 @@ async def main():
     else:
         logger.warning("⚠️ Ngrok URL olinmadi, lekin bot ishlayveradi.")
 
-    # 7. Uvicorn serverni bitta loopda ishga tushirish (thread emas!)
+    # 9. Uvicorn serverni bitta loopda ishga tushirish (thread emas!)
     # Thread o'rniga background task — bitta event loop, bitta pool.
     config = uvicorn.Config(
         app,
@@ -305,10 +309,10 @@ async def main():
     logger.info("✅ FastAPI tayyor: http://localhost:8000")
     logger.info("🤖 Bot ishga tushmoqda...")
 
-    # 8. Bot handlerlarini ulash (oldin start_bot() da bor edi, qayta ixtiro bo'lmasin)
+    # 10. Bot handlerlarini ulash (oldin start_bot() da bor edi, qayta ixtiro bo'lmasin)
     dp.include_router(handlers_router)
 
-    # 9. Bot polling — asosiy loopni bloklab turadi
+    # 11. Bot polling — asosiy loopni bloklab turadi
     try:
         await dp.start_polling(bot)
     finally:

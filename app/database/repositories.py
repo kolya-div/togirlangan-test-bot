@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.models import Answer, Question, TestAttempt, User, TestSettings
 from app.utils.helpers import utcnow
+from app.utils.cache import cached, questions_cache, test_settings_cache
 
 
 # ==================== USER ====================
@@ -68,6 +69,7 @@ async def get_registered_users(session: AsyncSession) -> list[User]:
 
 # ==================== QUESTIONS ====================
 
+@cached(questions_cache, ttl=600)  # Cache for 10 minutes
 async def get_all_questions(session: AsyncSession) -> list[Question]:
     """Barcha savollarni bo'lim va tartib raqami bo'yicha olish."""
     result = await session.execute(
@@ -79,6 +81,7 @@ async def get_all_questions(session: AsyncSession) -> list[Question]:
     return list(result.scalars().all())
 
 
+@cached(questions_cache, ttl=600)  # Cache for 10 minutes
 async def get_questions_by_section(session: AsyncSession, section: str) -> list[Question]:
     """Berilgan bo'limdagi savollarni olish."""
     result = await session.execute(
@@ -103,6 +106,9 @@ async def add_question(
     max_points: int | None = None,
 ) -> Question:
     """Yangi savol qo'shish."""
+    # Invalidate cache when questions are modified
+    await questions_cache.clear()
+    
     question = Question(
         section=section,
         order_number=order_number,
@@ -123,6 +129,9 @@ async def add_question(
 
 async def delete_all_questions(session: AsyncSession) -> None:
     """Barcha savollarni o'chirish."""
+    # Invalidate cache when questions are deleted
+    await questions_cache.clear()
+    
     await session.execute(delete(Question))
     await session.commit()
 
@@ -148,6 +157,7 @@ async def delete_all_data(session: AsyncSession) -> None:
 
 # ==================== TEST SETTINGS ====================
 
+@cached(test_settings_cache, ttl=300)  # Cache for 5 minutes
 async def get_test_settings(session: AsyncSession) -> TestSettings | None:
     """Hozirgi test sozlamalarini olish."""
     result = await session.execute(
@@ -162,6 +172,9 @@ async def create_or_update_test_settings(
     vip_limit: int = 1,
 ) -> TestSettings:
     """Test sozlamalarini yaratish yoki yangilash."""
+    # Invalidate cache when settings are updated
+    await test_settings_cache.clear()
+    
     today = utcnow().date()
     result = await session.execute(
         select(TestSettings).where(

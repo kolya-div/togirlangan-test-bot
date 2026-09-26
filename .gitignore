@@ -1,75 +1,81 @@
-# ─────────────────────────────
 # Python
-# ─────────────────────────────
 __pycache__/
 *.py[cod]
 *$py.class
-*.egg-info/
-.eggs/
+*.so
+.Python
 build/
+develop-eggs/
 dist/
-.mypy_cache/
-.ruff_cache/
-.pytest_cache/
-.coverage
-.coverage.*
-htmlcov/
-.venv/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
 venv/
 env/
 ENV/
+env.bak/
+venv.bak/
 
-# ─────────────────────────────
-# Secrets — .env NIMALAR BO'LSA HAM GIT GA TUSHMASLIGI KERAK!
-# (BOT_TOKEN, API kalitlar, DB paroli va h.k.)
-# ─────────────────────────────
+# Environment variables
 .env
-!.env.example
+.env.local
+.env.*.local
 
-# ─────────────────────────────
-# Ma'lumotlar / ish vaqti fayllari
-# ─────────────────────────────
-data/
-!data/.gitkeep
-turkish.db
+# Database
 *.db
+*.sqlite
 *.sqlite3
 
-# ─────────────────────────────
-# Loglar
-# ─────────────────────────────
+# Audio files
+data/audios/
+*.webm
+*.ogg
+*.mp3
+*.wav
+*.m4a
+*.mp4
+
+# Logs
 *.log
-*.log.*
 logs/
 
-# ─────────────────────────────
-# Webapp (React + Vite)
-# ─────────────────────────────
-webapp/node_modules/
-webapp/dist/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-
-# ─────────────────────────────
-# LocalAI (tashqi idish/tool — foydalanuvchi ma'lumotlari)
-# ─────────────────────────────
-LocalAI/workspace/
-LocalAI/logs/
-LocalAI/.venv/
-LocalAI/__pycache__/
-
-# ─────────────────────────────
-# IDE / OS
-# ─────────────────────────────
+# IDE
 .vscode/
 .idea/
 *.swp
+*.swo
+*~
 .DS_Store
-Thumbs.db
 
-# ─────────────────────────────
-# AI asboblar
-# ─────────────────────────────
-CONTINUE_PROMPT.md
+# Node.js
+node_modules/
+dist/
+webapp/dist/
+webapp/.vite/
+
+# Cache
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+
+# Ngrok
+ngrok*
+
+# Temp files
+*.tmp
+*.temp

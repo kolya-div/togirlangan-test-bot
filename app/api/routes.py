@@ -22,6 +22,12 @@ from app.services.report_service import MAX_TOTAL_POINTS
 from app.services.report_worker import enqueue_report
 from app.utils.helpers import utcnow
 from app.utils.security import get_telegram_user_id, validate_telegram_webapp_data
+from app.utils.validators import (
+    validate_telegram_id,
+    validate_string_input,
+    sanitize_transcript,
+    validate_audio_file_size
+)
 
 logger = logging.getLogger(__name__)
 
@@ -116,12 +122,28 @@ async def webapp_init(init_data: str = Form(...)) -> dict:
     user_id FAQAT validatsiya qilingan initData dan olinadi — frontend
     tomonidan yuborilgan hech qanday user_id/query paramga ishonilmaydi.
     """
+    # Validate init_data input
+    try:
+        init_data = validate_string_input(
+            init_data,
+            max_length=5000,
+            field_name="init_data"
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    
     user_id = get_telegram_user_id(init_data)
     if user_id is None:
         raise HTTPException(
             status_code=401,
             detail="Avtorizatsiya yaroqsiz yoki eskirgan. Botdan qayta oching.",
         )
+    
+    # Validate user_id
+    try:
+        user_id = validate_telegram_id(user_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     async with SessionLocal() as session:
         result = await session.execute(
@@ -355,6 +377,16 @@ async def upload_answer(
     - Memory safety: chunked streaming → temp file → final (RAM'da ~64KB)
     """
     async with _UPLOAD_SEMAPHORE:
+        # Validate init_data input
+        try:
+            init_data = validate_string_input(
+                init_data,
+                max_length=5000,
+                field_name="init_data"
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        
         # Authorization tekshirish
         user_id = get_telegram_user_id(init_data)
         if user_id is None:
@@ -362,12 +394,28 @@ async def upload_answer(
                 status_code=401,
                 detail="Avtorizatsiya yaroqsiz yoki eskirgan. Botdan qayta oching.",
             )
+        
+        # Validate user_id
+        try:
+            user_id = validate_telegram_id(user_id)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
 
         if not audio.filename:
             raise HTTPException(
                 status_code=400,
                 detail="Audio fayl topilmadi",
             )
+
+        # Validate filename for security
+        try:
+            validate_string_input(
+                audio.filename,
+                max_length=255,
+                field_name="audio_filename"
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
 
         extension = Path(audio.filename).suffix.lower()
         if extension not in {".webm", ".ogg", ".mp4", ".wav", ".mp3"}:
@@ -407,6 +455,12 @@ async def upload_answer(
                             detail=f"Audio fayl juda katta (maksimum {max_size_mb}MB)",
                         )
                     temp_file.write(chunk)
+
+            # Validate file size using validator
+            try:
+                validate_audio_file_size(total_size, max_size_mb)
+            except ValueError as e:
+                raise HTTPException(status_code=413, detail=str(e))
 
             if total_size < 1024:
                 raise HTTPException(
@@ -759,7 +813,7 @@ async def get_attempt_results(
                 "question_section": question.section if question else "",
                 "question_order": question.order_number if question else 0,
                 "max_points": question.max_points if question else None,
-                "transcript": feedback_data.get("transcript", answer.transcript or ""),
+                "transcript": sanitize_transcript(feedback_data.get("transcript", answer.transcript or "")),
                 "corrected_text": feedback_data.get("corrected_text", ""),
                 "is_grammatically_correct": feedback_data.get("is_grammatically_correct", True),
                 "mistakes": feedback_data.get("mistakes", []),

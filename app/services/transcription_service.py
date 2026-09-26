@@ -6,6 +6,13 @@ import random
 from pathlib import Path
 
 from app.config import settings
+from app.services.ai_provider_base import (
+    AIProvider,
+    MultiKeyRotator,
+    ProviderChain,
+    create_gemini_rotator
+)
+from app.services.prompts import TRANSCRIPTION_SYSTEM_PROMPT
 from app.services.rate_limiter import wait_gemini, wait_groq
 
 logger = logging.getLogger(__name__)
@@ -16,17 +23,6 @@ TRANSCRIPTION_TIMEOUT = 120
 MAX_RETRIES = 3
 RETRY_BASE_DELAY = 2.0
 RATE_LIMIT_DELAY = 10.0
-
-GEMINI_PROMPT = (
-    "Sening vazifang — berilgan audio fayldagi nutqni matnga aylantirish.\n"
-    "Qoidalar:\n"
-    "- Faqat audio ichidagi gaplarni yoz.\n"
-    "- Turk tilida yoz.\n"
-    "- Qo'shimcha gap yoki tushuntirish qo'shma.\n"
-    "- Matn boshida va oxirida bo'sh joy qoldirma.\n"
-    "- Punctuationlarni to'g'ri qo'y.\n"
-    "- Agar audio bo'sh yoki tushunarsiz bo'lsa, faqat 'EMPTY' deb javob ber.\n"
-)
 
 
 def _validate_audio_file(audio_path: Path) -> None:
@@ -86,8 +82,8 @@ async def _transcribe_with_gemini(audio_path: Path) -> str:
     from google import genai
 
     # Multi-key rotation: round-robin across available keys
-    from app.services.evaluation_service import _next_gemini_key
-    api_key = await _next_gemini_key()
+    rotator = create_gemini_rotator()
+    api_key = await rotator.get_next_key() if rotator else None
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY sozlanmagan")
 
@@ -109,7 +105,7 @@ async def _transcribe_with_gemini(audio_path: Path) -> str:
         contents=[
             {
                 "parts": [
-                    {"text": GEMINI_PROMPT},
+                    {"text": TRANSCRIPTION_SYSTEM_PROMPT},
                     {
                         "inline_data": {
                             "mime_type": mime_type,
@@ -222,25 +218,14 @@ async def transcribe_audio(audio_path: str | Path) -> str:
     _validate_audio_file(audio_path)
 
     providers = _get_provider_chain()
-
-    for idx, (name, fn) in enumerate(providers):
-        try:
-            result = await _try_provider(name, fn, audio_path)
-            return result
-        except RuntimeError as e:
-            remaining = len(providers) - idx - 1
-            if remaining > 0:
-                logger.warning(
-                    f"Provider '{name}' ishlamayapti, fallback → "
-                    f"{providers[idx + 1][0]}: {e}"
-                )
-            else:
-                logger.error(
-                    f"Barcha providerlar ishlamadi ({[p[0] for p in providers]}): {e}"
-                )
-                raise
-
-    raise RuntimeError("Transkripsiya xizmati vaqtincha ishlamayapti")
+    provider_chain = ProviderChain(providers)
+    
+    try:
+        result = await provider_chain.execute(audio_path)
+        return result
+    except RuntimeError as e:
+        logger.error(f"Transkripsiya xizmati vaqtincha ishlamayapti: {e}")
+        raise
 
 
 async def transcribe_audio_file(file_id: str, bot, download_dir: str = "data/audios") -> str:

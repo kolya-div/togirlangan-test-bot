@@ -54,11 +54,11 @@ class Settings(BaseSettings):
     openai_rpm_per_key: int = 60
 
     # DB connection pool
-    db_pool_size: int = 30
-    db_max_overflow: int = 30
+    db_pool_size: int = 40
+    db_max_overflow: int = 40
 
-    # Report worker soni (100+ user uchun 8-10)
-    report_workers: int = 8
+    # Report worker soni (50 user uchun 15, 100+ user uchun 20)
+    report_workers: int = 15
 
     # Concurrent upload chegarasi (100 user uchun 100)
     upload_semaphore: int = 100
