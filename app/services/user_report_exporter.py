@@ -1,4 +1,6 @@
+import json
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -9,8 +11,8 @@ from docx.shared import Pt, RGBColor
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database.models import TestAttempt, User
-from app.utils.helpers import format_filename, utcnow
+from app.database.models import Answer, Question, TestAttempt, User
+from app.utils.helpers import format_filename, local_now, to_local
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +44,8 @@ async def collect_users_with_results(
     )
     attempts = list(att_result.scalars().all())
 
+    answers_by_attempt = await _collect_answers(session, [a.id for a in attempts])
+
     attempts_by_user: dict[Any, list[TestAttempt]] = {}
     for attempt in attempts:
         attempts_by_user.setdefault(attempt.user_id, []).append(attempt)
@@ -61,6 +65,7 @@ async def collect_users_with_results(
                     "finished_at": None,
                     "score": None,
                     "level": None,
+                    "answers": [],
                 }
             )
             continue
@@ -77,6 +82,7 @@ async def collect_users_with_results(
                     "finished_at": attempt.finished_at,
                     "score": attempt.score,
                     "level": attempt.level,
+                    "answers": answers_by_attempt.get(attempt.id, []),
                 }
             )
 
@@ -85,8 +91,129 @@ async def collect_users_with_results(
     return rows
 
 
+async def _collect_answers(
+    session: AsyncSession,
+    attempt_ids: list[int],
+) -> dict[int, list[dict[str, Any]]]:
+    """Har bir attempt uchun javoblar: savol, transkript, ball, xatolar.
+    Savol tartibida (bo'lim, raqam) qaytariladi."""
+    if not attempt_ids:
+        return {}
+
+    result = await session.execute(
+        select(Answer, Question)
+        .join(Question, Answer.question_id == Question.id, isouter=True)
+        .where(Answer.attempt_id.in_(attempt_ids))
+        .order_by(Answer.attempt_id, Question.section, Question.order_number)
+    )
+
+    by_attempt: dict[int, list[dict[str, Any]]] = {}
+    for answer, question in result.all():
+        feedback: dict[str, Any] = {}
+        if answer.feedback:
+            try:
+                feedback = json.loads(answer.feedback)
+            except (json.JSONDecodeError, TypeError):
+                feedback = {}
+
+        max_points = question.max_points if question else None
+        earned = None
+        if max_points and answer.score is not None:
+            # report_service bilan bir xil hisob: foiz → savol balli
+            earned = round(answer.score * max_points / 100)
+
+        by_attempt.setdefault(answer.attempt_id, []).append(
+            {
+                "section": question.section if question else "",
+                "order_number": question.order_number if question else 0,
+                "question": question.text if question else "(savol o'chirilgan)",
+                "transcript": answer.transcript or feedback.get("transcript") or "",
+                "corrected_text": feedback.get("corrected_text") or "",
+                "mistakes": feedback.get("mistakes") or [],
+                "score": answer.score,
+                "max_points": max_points,
+                "earned": earned,
+            }
+        )
+    return by_attempt
+
+
+# XML (Word) da ruxsat etilmagan boshqaruv belgilari: \t, \n, \r dan tashqari.
+# Bitta shunday belgi (ism yoki AI transkriptida) python-docx'da ValueError
+# beradi va butun kunlik hisobot yuborilmay qoladi.
+_XML_INVALID_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]")
+
+
+def _clean(value: Any) -> str:
+    """Matnni Word uchun xavfsiz qiladi."""
+    if value is None:
+        return ""
+    return _XML_INVALID_RE.sub("", str(value))
+
+
 def _fmt_dt(value) -> str:
-    return value.strftime("%Y-%m-%d %H:%M") if value else "*"
+    local = to_local(value)
+    return local.strftime("%Y-%m-%d %H:%M") if local else "*"
+
+
+def _fmt_answer_score(item: dict[str, Any]) -> str:
+    if item["score"] is None:
+        return "baholanmagan"
+    if item["max_points"]:
+        return f"{item['earned']}/{item['max_points']}"
+    return f"{item['score']}%"
+
+
+def _add_answers_section(doc, rows: list[dict[str, Any]]) -> None:
+    """Har bir foydalanuvchining javoblari: savol, aytgani, xatolar, ball."""
+    with_answers = [r for r in rows if r["answers"]]
+    if not with_answers:
+        return
+
+    doc.add_page_break()
+    doc.add_heading("Foydalanuvchilar javoblari", level=1)
+
+    for row in with_answers:
+        score = f"{row['score']}/75" if row["score"] is not None else "—"
+        doc.add_heading(
+            _clean(
+                f"{row['full_name']} (@{row['username']}, ID {row['telegram_id']}) — "
+                f"ball: {score}, daraja: {row['level'] or '—'}"
+            ),
+            level=2,
+        )
+
+        for idx, item in enumerate(row["answers"], start=1):
+            q = doc.add_paragraph()
+            q.add_run(
+                _clean(f"{idx}. Savol ({item['section']}.{item['order_number']}): ")
+            ).font.bold = True
+            q.add_run(_clean(item["question"]))
+
+            said = doc.add_paragraph()
+            said.add_run("Aytgani: ").font.bold = True
+            said.add_run(_clean(item["transcript"]) or "(transkripsiya qilinmadi)")
+
+            if item["corrected_text"] and item["corrected_text"] != item["transcript"]:
+                corrected = doc.add_paragraph()
+                corrected.add_run("To'g'ri varianti: ").font.bold = True
+                corrected.add_run(_clean(item["corrected_text"]))
+
+            mistakes = [m for m in item["mistakes"] if isinstance(m, dict)]
+            if mistakes:
+                doc.add_paragraph().add_run(
+                    f"Xatolar ({len(mistakes)} ta):"
+                ).font.bold = True
+                for m in mistakes:
+                    line = f"{m.get('original') or ''} → {m.get('correct') or ''}"
+                    explanation = m.get("explanation_uz") or m.get("explanation")
+                    if explanation:
+                        line += f" — {explanation}"
+                    doc.add_paragraph(_clean(line), style="List Bullet")
+
+            score_p = doc.add_paragraph()
+            score_p.add_run("Ball: ").font.bold = True
+            score_p.add_run(_fmt_answer_score(item))
 
 
 def _style_header_cell(cell) -> None:
@@ -111,7 +238,7 @@ def build_report_docx(
 
     subtitle = doc.add_paragraph()
     subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = subtitle.add_run(f"Hisobot sanasi: {utcnow():%Y-%m-%d %H:%M}")
+    run = subtitle.add_run(f"Hisobot sanasi: {local_now():%Y-%m-%d %H:%M}")
     run.font.size = Pt(10)
     run.font.color.rgb = RGBColor(0x66, 0x66, 0x66)
 
@@ -142,15 +269,17 @@ def build_report_docx(
         cells = table.add_row().cells
         cells[0].text = str(idx)
         cells[1].text = str(row["telegram_id"])
-        cells[2].text = row["full_name"] or "—"
-        cells[3].text = row["username"] or "—"
-        cells[4].text = row["phone"] or "—"
+        cells[2].text = _clean(row["full_name"]) or "—"
+        cells[3].text = _clean(row["username"]) or "—"
+        cells[4].text = _clean(row["phone"]) or "—"
         cells[5].text = _fmt_dt(row["created_at"])
-        cells[6].text = row["status"] or "—"
+        cells[6].text = _clean(row["status"]) or "—"
         cells[7].text = _fmt_dt(row["started_at"])
         cells[8].text = _fmt_dt(row["finished_at"])
         cells[9].text = str(row["score"]) if row["score"] is not None else "—"
-        cells[10].text = row["level"] or "—"
+        cells[10].text = _clean(row["level"]) or "—"
+
+    _add_answers_section(doc, rows)
 
     doc.save(str(file_path))
     logger.info("Hisobot fayli saqlandi: %s (%s qator)", file_path, len(rows))
@@ -158,7 +287,7 @@ def build_report_docx(
 
 def default_report_path() -> Path:
     """Hozirgi vaqtga asoslangan hisobot fayli yo'li."""
-    name = format_filename(f"users_report_{utcnow():%Y%m%d_%H%M%S}")
+    name = format_filename(f"users_report_{local_now():%Y%m%d_%H%M%S}")
     return REPORTS_DIR / f"{name}.docx"
 
 

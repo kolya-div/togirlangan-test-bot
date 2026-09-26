@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     # CORS sozlamalari
     cors_origins: str = "*"
 
+    # Kunlik hisobot/tozalash vaqti shu vaqt mintaqasida 00:00 da bajariladi
+    report_timezone: str = "Asia/Tashkent"
+
     # Logging sozlamalari
     log_level: str = "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
 

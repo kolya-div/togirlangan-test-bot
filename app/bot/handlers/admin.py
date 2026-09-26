@@ -1030,7 +1030,7 @@ async def cleanup_confirm(
     await _safe_edit(
         callback.message,
         text="🧹 <b>Tozalash yakunlandi</b>\n\n"
-        f"• Qaytarilgan tiqilib qolgan attemptlar: <b>{result['reset_stuck']}</b>\n"
+        f"• Qayta navbatga qo'yilgan attemptlar: <b>{result['requeued_stuck']}</b>\n"
         f"• O'chirilgan eski attemptlar: <b>{result['deleted_attempts']}</b>\n"
         f"• O'chirilgan audio fayllar: <b>{result['deleted_audio_files']}</b>",
         reply_markup=results_menu(),

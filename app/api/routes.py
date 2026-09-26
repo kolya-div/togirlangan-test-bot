@@ -678,7 +678,9 @@ async def finish_attempt(
             logger.warning("Foydalanuvchiga xabar yuborib bo'lmadi (tg=%s): %s", telegram_user_id, e)
 
     # Navbatga qo'shish — DB connection ochiq emas
-    await enqueue_report(attempt_id, total_answers=answers_count)
+    if not await enqueue_report(attempt_id, total_answers=answers_count):
+        # Periodic recovery (app/main.py) keyinroq qayta navbatga qo'shadi.
+        logger.warning("Attempt #%s navbatga qo'shilmadi — recovery kutiladi", attempt_id)
 
     return {
         "processing": True,

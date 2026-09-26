@@ -45,8 +45,13 @@ copy .env.example .env        # Windows
 
 # 3. Hamma narsani bitta buyruq bilan ishga tushirish
 python run.py
+# → kerak bo'lsa webapp uchun `npm install` va `npm run build` avtomatik
 # → FastAPI (localhost:8000), Ngrok tunnel, Telegram bot avtomatik boshlanadi
 ```
+
+> Node.js (npm) o'rnatilgan bo'lishi kerak. `run.py` `webapp/node_modules`
+> yo'q yoki `package.json` o'zgargan bo'lsa `npm install`, `webapp/dist` yo'q
+> yoki `webapp/src` o'zgargan bo'lsa `npm run build` ni o'zi bajaradi.
 
 ## .env Sozlamalari (To'liq)
 

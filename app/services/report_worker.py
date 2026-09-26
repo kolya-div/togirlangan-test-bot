@@ -93,6 +93,11 @@ async def _notify_admin_queue_full(queue) -> None:
         logger.warning("Admin xabar yuborilmadi: %s", e)
 
 
+def is_pending(attempt_id: int) -> bool:
+    """Attempt navbatda turibdimi yoki hozir qayta ishlanyaptimi."""
+    return attempt_id in _pending_attempts
+
+
 async def enqueue_report(attempt_id: int, total_answers: int = 0) -> bool:
     """
     Hisobotni qayta ishlash navbatiga qo'shadi.

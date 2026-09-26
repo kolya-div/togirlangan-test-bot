@@ -3,7 +3,7 @@ import time
 from datetime import timedelta
 from pathlib import Path
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -12,9 +12,22 @@ from app.utils.helpers import utcnow
 
 logger = logging.getLogger(__name__)
 
-# Qayta ishlanmoqda ("processing") holatida bu vaqtdan ko'proq turgan
-# attemptlar "active" ga qaytariladi (user testni davom ettira oladi).
-PROCESSING_STALE_MINUTES = 30
+# Qayta ishlanmoqda ("processing") holatida bu vaqtdan ko'proq turgan va
+# navbatda bo'lmagan attemptlar hisobot navbatiga QAYTA qo'shiladi.
+# Navbat xotirada (asyncio.Queue) — server qayta ishga tushsa yoki navbat
+# to'lib enqueue muvaffaqiyatsiz bo'lsa, attempt "processing" da qolib
+# ketadi. Oldin bunday attemptlar "active" ga qaytarilardi — lekin
+# create_attempt "active" ga 403 beradi, natijada foydalanuvchi na natija
+# oladi, na testni qayta topshira oladi.
+# Kichik zaxira: finish commit va enqueue_report orasidagi oraliq
+# (navbat to'la bo'lsa ~30s retry) bilan to'qnashmaslik uchun.
+PROCESSING_STALE_MINUTES = 5
+
+# Bitta attempt necha marta qayta navbatga qo'yiladi. Worker har safar
+# xato bilan tugasa, cheksiz aylanib qolmasligi uchun chegara. Chegaradan
+# keyin adminlarga xabar beriladi (admin foydalanuvchini blokdan chiqaradi).
+MAX_REQUEUE_ATTEMPTS = 3
+_requeue_counts: dict[int, int] = {}
 
 # Bu vaqtdan eski yakunlangan/tugallanmagan attemptlar (javoblari va
 # audio fayllari bilan birga) o'chiriladi.
@@ -36,21 +49,82 @@ DELETE_OLDER_DAYS = 30
 ORPHAN_MIN_AGE_SECONDS = 600  # 10 daqiqa
 
 
-async def reset_stuck_processing(session: AsyncSession) -> int:
-    """Serverni qayta ishga tushirishdan keyin tiqilib qolgan
-    'processing' attemptlarni 'active' holatiga qaytaradi."""
-    stale_before = utcnow() - timedelta(minutes=PROCESSING_STALE_MINUTES)
+async def find_stuck_processing(
+    session: AsyncSession,
+    stale_minutes: int = PROCESSING_STALE_MINUTES,
+) -> list[int]:
+    """Navbatda bo'lmagan va `stale_minutes` dan beri "processing" holatida
+    turgan attempt ID lari. HECH NARSA O'ZGARTIRMAYDI."""
+    from app.services.report_worker import is_pending
+
+    stale_before = utcnow() - timedelta(minutes=stale_minutes)
     result = await session.execute(
-        select(TestAttempt).where(
+        select(TestAttempt.id).where(
             TestAttempt.status == "processing",
             TestAttempt.finished_at < stale_before,
         )
     )
-    stuck = list(result.scalars().all())
-    for attempt in stuck:
-        attempt.status = "active"
-    logger.info("Stuck processing attempts reset to active: %s", [a.id for a in stuck])
-    return len(stuck)
+    return [aid for (aid,) in result.all() if not is_pending(aid)]
+
+
+async def requeue_stuck_processing(
+    session: AsyncSession,
+    stale_minutes: int = PROCESSING_STALE_MINUTES,
+) -> int:
+    """Tiqilib qolgan "processing" attemptlarni hisobot navbatiga qayta
+    qo'shadi (holat o'zgarmaydi — "processing" qoladi).
+
+    Faqat hisobot workerlari ishlayotgan processda chaqirilishi kerak
+    (navbat xotirada).
+    """
+    from app.services.report_worker import enqueue_report
+
+    stuck_ids = await find_stuck_processing(session, stale_minutes)
+    requeued: list[int] = []
+    given_up: list[int] = []
+
+    for attempt_id in stuck_ids:
+        count = _requeue_counts.get(attempt_id, 0)
+        if count >= MAX_REQUEUE_ATTEMPTS:
+            # Oxirgi qayta urinish ham natija bermadi — adminga bir marta xabar.
+            if count == MAX_REQUEUE_ATTEMPTS:
+                _requeue_counts[attempt_id] = count + 1
+                given_up.append(attempt_id)
+            continue
+        _requeue_counts[attempt_id] = count + 1
+
+        answers_count = (
+            await session.execute(
+                select(func.count())
+                .select_from(Answer)
+                .where(Answer.attempt_id == attempt_id)
+            )
+        ).scalar() or 0
+        if await enqueue_report(attempt_id, total_answers=answers_count):
+            requeued.append(attempt_id)
+
+    if requeued:
+        logger.info("Stuck processing attempts requeued: %s", requeued)
+    if given_up:
+        await _notify_admins_requeue_limit(given_up)
+    return len(requeued)
+
+
+async def _notify_admins_requeue_limit(attempt_ids: list[int]) -> None:
+    """Oxirgi urinishda ham qayta ishlanmasa — admin aralashuvi kerak."""
+    from app.services.telegram_sender import telegram_sender
+
+    text = (
+        "⚠️ <b>Hisobot qayta ishlanmadi</b>\n\n"
+        f"Attemptlar {MAX_REQUEUE_ATTEMPTS} marta qayta navbatga qo'yildi: "
+        + ", ".join(f"#{aid}" for aid in attempt_ids)
+        + "\nAgar natija kelmasa, foydalanuvchini blokdan chiqaring."
+    )
+    for admin_id in settings.admin_id_list:
+        try:
+            await telegram_sender.send_message(admin_id, text)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Admin %s ga xabar yuborilmadi: %s", admin_id, exc)
 
 
 async def delete_old_attempts(session: AsyncSession) -> dict:
@@ -150,16 +224,23 @@ def _delete_files(paths: list[str]) -> int:
     return deleted
 
 
-async def run_cleanup(session: AsyncSession) -> dict:
-    """Barcha tozalash ishlarini bajarib, natija hisobini qaytaradi."""
-    reset_count = await reset_stuck_processing(session)
+async def run_cleanup(session: AsyncSession, requeue: bool = True) -> dict:
+    """Barcha tozalash ishlarini bajarib, natija hisobini qaytaradi.
+
+    requeue=False — alohida processdan (scripts/cleanup.py) chaqirilganda:
+    u yerda hisobot navbati yo'q, shuning uchun faqat sanaladi.
+    """
+    if requeue:
+        stuck_count = await requeue_stuck_processing(session)
+    else:
+        stuck_count = len(await find_stuck_processing(session))
     old_result = await delete_old_attempts(session)
     orphan_files = await delete_orphan_audios(session)
 
     await session.commit()
 
     return {
-        "reset_stuck": reset_count,
+        "requeued_stuck": stuck_count,
         "deleted_attempts": old_result["attempts"],
         "deleted_audio_files": old_result["files"] + orphan_files,
     }
