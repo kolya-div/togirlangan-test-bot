@@ -84,24 +84,32 @@ export async function uploadAnswer(attemptId, questionId, audioBlob, initData) {
         UPLOAD_TIMEOUT_MS
     )
 
+    // 4xx — qayta urinish foyda bermaydi (retryable=false). Tarmoq xatosi
+    // va 5xx esa vaqtinchalik bo'lishi mumkin — AudioRecorder qayta urinadi.
+    const permanent = (message) => {
+        const err = new Error(message)
+        err.retryable = false
+        return err
+    }
+
     if (res.status === 401) {
-        throw new Error("Avtorizatsiya yaroqsiz. Botdan qayta oching.")
+        throw permanent("Avtorizatsiya yaroqsiz. Botdan qayta oching.")
     }
 
     if (res.status === 403) {
-        throw new Error("Test yakunlangan. Yangi javob yuborish mumkin emas.")
+        throw permanent("Test yakunlangan. Yangi javob yuborish mumkin emas.")
     }
 
     if (res.status === 413) {
-        throw new Error("Audio fayl juda katta")
+        throw permanent("Audio fayl juda katta")
     }
 
     if (res.status === 422) {
-        throw new Error("Audio yuborish ma'lumotlari noto'g'ri")
+        throw permanent("Audio yuborish ma'lumotlari noto'g'ri")
     }
 
     if (res.status === 400) {
-        throw new Error("Audio formati yaroqsiz")
+        throw permanent("Audio formati yaroqsiz")
     }
 
     if (res.status >= 500) {

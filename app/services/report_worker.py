@@ -194,6 +194,23 @@ async def _report_worker(idx: int) -> None:
                 break
 
 
+# AI chaqiruvlari (Gemini SDK sinxron) asyncio.to_thread orqali loop'ning
+# default thread pool'ida bajariladi. Uning standart hajmi CPU soniga
+# bog'liq (min(32, cpu+4) — 4 yadroda atigi 8), shuning uchun REPORT_WORKERS
+# qancha bo'lmasin, bir vaqtda faqat 8 ta AI so'rov ketardi: 60 user
+# yuklama testida natija kutish ~10 daqiqaga cho'zildi. Pool har bir
+# worker'ga bitta oqim + boshqa to_thread ishlari uchun zaxira beradi.
+AI_THREAD_POOL_SIZE = max(32, REPORT_WORKERS * 2)
+
+
+def _ensure_thread_pool(loop: asyncio.AbstractEventLoop) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    loop.set_default_executor(
+        ThreadPoolExecutor(max_workers=AI_THREAD_POOL_SIZE, thread_name_prefix="ai")
+    )
+
+
 def start_report_workers() -> None:
     """Navbat ishchilarini joriy event loopda ishga tushiradi."""
     global _started
@@ -201,6 +218,7 @@ def start_report_workers() -> None:
         return
     _started = True
     loop = asyncio.get_running_loop()
+    _ensure_thread_pool(loop)
     for i in range(REPORT_WORKERS):
         _report_worker_tasks.append(loop.create_task(_report_worker(i)))
     logger.info("%s ta hisobot ishchisi ishga tushdi", REPORT_WORKERS)

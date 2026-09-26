@@ -78,11 +78,23 @@ def _detect_mime_type(audio_path: Path) -> str:
     return ext_map.get(audio_path.suffix.lower(), "audio/webm")
 
 
+# Umumiy rotator: har chaqiruvda yangisini yaratish hisoblagichni 0 dan
+# boshlardi — bir nechta kalit bo'lsa ham doim birinchisi ishlatilardi.
+_gemini_rotator = None
+
+
+def _get_gemini_rotator():
+    global _gemini_rotator
+    if _gemini_rotator is None:
+        _gemini_rotator = create_gemini_rotator()
+    return _gemini_rotator
+
+
 async def _transcribe_with_gemini(audio_path: Path) -> str:
     from google import genai
 
     # Multi-key rotation: round-robin across available keys
-    rotator = create_gemini_rotator()
+    rotator = _get_gemini_rotator()
     api_key = await rotator.get_next_key() if rotator else None
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY sozlanmagan")
@@ -208,7 +220,7 @@ def _get_provider_chain() -> list[tuple[str, callable]]:
             chain.append(("groq", _transcribe_with_groq))
     else:
         chain.append(("groq", _transcribe_with_groq))
-        if settings.gemini_api_key:
+        if settings.gemini_keys_list:
             chain.append(("gemini", _transcribe_with_gemini))
     return chain
 

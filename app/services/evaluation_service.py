@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 EVAL_MAX_RETRIES = 3
 EVAL_RATE_LIMIT_DELAY = 10.0
+EVAL_TIMEOUT = 120.0
 
 # Gemini key rotator - shared instance with thread safety
 _gemini_rotator: Optional[MultiKeyRotator] = None
@@ -117,8 +118,9 @@ async def evaluate_answer(
     Har bir provayder uchun rate limit bilan retry.
     """
 
-    # Gemini (bepul, birinchi)
-    if getattr(settings, "gemini_api_key", None):
+    # Gemini (bepul, birinchi). gemini_keys_list — GEMINI_API_KEY yoki
+    # GEMINI_API_KEYS (faqat ikkinchisi berilsa ham Gemini ishlatiladi).
+    if settings.gemini_keys_list:
         try:
             return await _evaluate_with_retry("gemini", _evaluate_with_gemini, question, transcript)
         except Exception as e:
@@ -248,10 +250,15 @@ async def _evaluate_with_gemini(question: str, transcript: str) -> dict:
     )
     model = getattr(settings, "gemini_stt_model", "gemini-3.6-flash")
 
-    response = await asyncio.to_thread(
-        client.models.generate_content,
-        model=model,
-        contents=[{"parts": [{"text": EVALUATION_SYSTEM_PROMPT + "\n\n" + prompt}]}],
+    # Timeout: osilib qolgan so'rov worker'ni cheksiz band qilmasin
+    # (transkripsiyada ham xuddi shunday — TRANSCRIPTION_TIMEOUT).
+    response = await asyncio.wait_for(
+        asyncio.to_thread(
+            client.models.generate_content,
+            model=model,
+            contents=[{"parts": [{"text": EVALUATION_SYSTEM_PROMPT + "\n\n" + prompt}]}],
+        ),
+        timeout=EVAL_TIMEOUT,
     )
 
     content = response.text if response.text else ""

@@ -3,7 +3,11 @@ import { uploadAnswer } from '../api.js'
 
 const MIN_AUDIO_BYTES = 1024
 const UPLOAD_TIMEOUT_MS = 60000
-const MAX_RETRIES = 2
+// Tarmoq uzilishida javob yo'qolmasligi uchun: 1s, 2s, 4s, 8s kutib
+// qayta urinish (~15s oyna). Oldin 2 × 1s edi — qisqa uzilishda ham
+// javob jimgina tashlab yuborilardi.
+const MAX_RETRIES = 4
+const RETRY_BASE_DELAY_MS = 1000
 
 const PREFERRED_MIME_TYPES = [
     'audio/webm;codecs=opus',
@@ -91,9 +95,10 @@ export default function AudioRecorder({
         // tekshiradi, shuning uchun shu yerda faqat o'shani ishlatamiz.
         if (
             retries < MAX_RETRIES &&
-            mountedRef.current
+            mountedRef.current &&
+            err?.retryable !== false
         ) {
-            await new Promise(r => setTimeout(r, 1000))
+            await new Promise(r => setTimeout(r, RETRY_BASE_DELAY_MS * 2 ** retries))
 
             return uploadWithRetry(
                 attemptId,
