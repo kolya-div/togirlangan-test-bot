@@ -1,4 +1,5 @@
 import asyncio
+import html
 import json
 import os
 import zipfile
@@ -9,6 +10,7 @@ from pathlib import Path
 from aiogram import F, Router
 from aiogram.types import CallbackQuery, Message, FSInputFile, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
+from aiogram.filters import Command
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -64,11 +66,15 @@ logger = logging.getLogger(__name__)
 
 from app.services.docx_parser import parse_docx_questions
 from app.services.ai_docx_service import parse_docx_with_ai
+from app.utils.helpers import to_local
 
 router = Router()
 
 # Broadcast xabarlari orasidagi minimal interval (Telegram flood limit xavfsizligi).
 _BROADCAST_INTERVAL = 0.05  # 20 msg/s — Telegram 30 msg/s limitidan past
+
+# Telegram Bot API orqali yuboriladigan fayl chegarasi
+_TELEGRAM_MAX_UPLOAD_MB = 50
 
 
 async def _safe_edit(message, **kwargs):
@@ -85,7 +91,7 @@ async def _download_docx(message: Message) -> Path | None:
         await message.answer("❌ Iltimos, docx fayl yuboring.")
         return None
 
-    if not message.document.file_name.endswith('.docx'):
+    if not (message.document.file_name or "").lower().endswith('.docx'):
         await message.answer("❌ Faqat .docx formatdagi fayllar qabul qilinadi.")
         return None
 
@@ -116,6 +122,21 @@ async def _save_questions(session: AsyncSession, questions: list[dict]) -> int:
         )
         count += 1
     return count
+
+
+# ==================== /cancel ====================
+
+# Admin xabarlari "Bekor qilish uchun /cancel" deydi, lekin handler yo'q
+# edi — /cancel holat handler'iga tushib ("faqat raqam yuboring" va h.k.)
+# admin shu holatda qolib ketardi. Holat handler'laridan OLDIN
+# ro'yxatdan o'tadi, shuning uchun istalgan holatda ishlaydi.
+@router.message(Command("cancel"))
+async def cancel_handler(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    if message.from_user.id in settings.admin_id_list:
+        await message.answer("Amal bekor qilindi.", reply_markup=admin_menu())
+    else:
+        await message.answer("Amal bekor qilindi.")
 
 
 # ==================== ASOSIY ADMIN CALLBACK ====================
@@ -193,7 +214,7 @@ async def vip_mode_handler(callback: CallbackQuery, state: FSMContext) -> None:
 @router.message(AdminTestAccessStates.waiting_vip_limit)
 async def process_vip_limit(message: Message, state: FSMContext) -> None:
     try:
-        vip_limit = int(message.text.strip())
+        vip_limit = int((message.text or "").strip())
         if vip_limit < 1:
             await message.answer("❌ Limit kamida 1 bo'lishi kerak.")
             return
@@ -449,7 +470,7 @@ async def list_questions_handler(callback: CallbackQuery, session: AsyncSession)
     for q in questions:
         if q.section != current_section:
             current_section = q.section
-            text += f"\n<b>📚 Bölüm {current_section}</b>\n"
+            text += f"\n<b>📚 Bölüm {html.escape(str(current_section))}</b>\n"
 
         sub_count = 0
         if q.sub_questions:
@@ -460,10 +481,15 @@ async def list_questions_handler(callback: CallbackQuery, session: AsyncSession)
                 sub_count = 0
 
         sub = f" (+{sub_count} ta)" if sub_count > 0 else ""
-        text += f"  {q.order_number}. {q.text[:60]}{sub} ({q.preparation_seconds}s/{q.answer_seconds}s)\n"
+        # HTML parse_mode: savol matnidagi <, >, & Telegram'da xato berardi
+        text += (
+            f"  {q.order_number}. {html.escape(q.text[:60])}{sub} "
+            f"({q.preparation_seconds}s/{q.answer_seconds}s)\n"
+        )
 
     if len(text) > 4000:
-        text = text[:4000] + "\n\n..."
+        # Qator chegarasida kesiladi — <b> teg o'rtasida kesilmasin
+        text = text[: text.rfind("\n", 0, 4000)] + "\n\n..."
 
     await _safe_edit(
         callback.message,
@@ -622,11 +648,12 @@ def _attempt_line(attempt, user) -> str:
         "active": "🟢",
     }.get(attempt.status, "❔")
 
-    name = (user.full_name or "—")[:30]
+    # Xabar HTML parse_mode da yuboriladi — ism/username escape qilinadi
+    name = html.escape((user.full_name or "—")[:30])
     if user.username:
-        name += f" (@{user.username[:20]})"
+        name += f" (@{html.escape(user.username[:20])})"
 
-    started = attempt.started_at.strftime("%Y-%m-%d %H:%M") if attempt.started_at else "—"
+    started = to_local(attempt.started_at).strftime("%Y-%m-%d %H:%M") if attempt.started_at else "—"
     score = f"{attempt.score}/75" if attempt.score is not None else "—"
     level = attempt.level or "—"
 
@@ -644,16 +671,16 @@ def _results_page_keyboard(offset: int, total: int) -> InlineKeyboardMarkup:
 
     if prev_offset >= 0:
         buttons.append(
-            InlineKeyboardButton("⬅️ Oldingi", callback_data=f"results_page:{prev_offset}")
+            InlineKeyboardButton(text="⬅️ Oldingi", callback_data=f"results_page:{prev_offset}")
         )
     if next_offset < total:
         buttons.append(
-            InlineKeyboardButton("Keyingi ➡️", callback_data=f"results_page:{next_offset}")
+            InlineKeyboardButton(text="Keyingi ➡️", callback_data=f"results_page:{next_offset}")
         )
 
     rows = [buttons] if buttons else []
     rows.append(
-        [InlineKeyboardButton("🔙 Orqaga", callback_data="results")]
+        [InlineKeyboardButton(text="🔙 Orqaga", callback_data="results")]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -970,16 +997,35 @@ async def zip_audios_handler(callback: CallbackQuery) -> None:
     zip_path = Path(__file__).resolve().parent.parent.parent / "data" / "exports" / "all_audios.zip"
     zip_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-        for file_path in audios_dir.rglob("*"):
-            if file_path.is_file():
-                zipf.write(file_path, file_path.relative_to(audios_dir))
+    await callback.answer("Arxiv tayyorlanmoqda...")
 
-    await callback.message.answer_document(
-        FSInputFile(zip_path),
-        caption="📦 Barcha audio fayllar",
-    )
-    await callback.answer()
+    def _build_zip() -> None:
+        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            for file_path in audios_dir.rglob("*"):
+                if file_path.is_file():
+                    zipf.write(file_path, file_path.relative_to(audios_dir))
+
+    # Ko'p audio bo'lsa zip bir necha soniya oladi — event loop (bot + API)
+    # bloklanmasligi uchun alohida oqimda.
+    await asyncio.to_thread(_build_zip)
+
+    size_mb = zip_path.stat().st_size / (1024 * 1024)
+    if size_mb > _TELEGRAM_MAX_UPLOAD_MB:
+        await callback.message.answer(
+            f"❌ Arxiv juda katta ({size_mb:.0f} MB). Telegram bot orqali "
+            f"{_TELEGRAM_MAX_UPLOAD_MB} MB gacha fayl yuborish mumkin.\n"
+            f"Fayl serverda saqlandi: data/exports/all_audios.zip"
+        )
+        return
+
+    try:
+        await callback.message.answer_document(
+            FSInputFile(zip_path),
+            caption="📦 Barcha audio fayllar",
+        )
+    except Exception:
+        logger.exception("Audio arxiv yuborilmadi")
+        await callback.message.answer("❌ Audio arxivni yuborishda xatolik.")
 
 
 # ==================== TOZALASH ====================

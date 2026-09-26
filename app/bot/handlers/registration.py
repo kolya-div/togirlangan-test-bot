@@ -35,10 +35,12 @@ async def start_registration(
             await message.answer("Siz allaqachon ro'yxatdan o'tgansiz.")
             return
 
+    # Ro'yxatdan o'tish FAQAT taklif havolasi orqali (start.py). Oldin bu
+    # buyruq istalgan foydalanuvchini havolasiz ro'yxatdan o'tkazardi.
     await message.answer(
-        "Ismingiz va familiyangizni kiriting:",
+        "❌ Siz testga taklif havolasi orqali kirishingiz kerak.\n\n"
+        "👤 Admin bilan bog'laning va yangi taklif havolasini oling.",
     )
-    await state.set_state(RegistrationStates.waiting_full_name)
 
 
 @router.message(RegistrationStates.waiting_full_name)
@@ -46,7 +48,7 @@ async def process_full_name(
     message: Message,
     state: FSMContext,
 ) -> None:
-    full_name = message.text.strip()
+    full_name = (message.text or "").strip()
 
     if len(full_name) < 3:
         await message.answer(
@@ -97,6 +99,11 @@ async def process_phone(
             admin_ids=settings.admin_id_list,
         )
 
+        # get_or_create_user ismni faqat YANGI userga yozadi — user esa
+        # /start da Telegram profil ismi bilan yaratilgan. Kiritilgan ism
+        # shu yerda saqlanmasa, hisobotlarda profil ismi chiqardi.
+        if full_name:
+            user.full_name = full_name[:255]
         user.phone = phone
         user.is_registered = True
 
