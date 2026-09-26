@@ -18,32 +18,49 @@ from app.bot.bot import bot, dp
 from app.config import settings
 from app.database.database import init_db, SessionLocal
 from app.services.report_worker import start_report_workers, stop_report_workers
-from app.services.cleanup_service import reset_stuck_processing, delete_orphan_audios
+from app.services.cleanup_service import requeue_stuck_processing, delete_orphan_audios
 
 logger = logging.getLogger(__name__)
 
 
 async def _periodic_stuck_recovery() -> None:
-    """Har 5 daqiqada 'processing' attemptlarni tekshiradi.
-
-    30+ daqiqa turgan attemptlarni 'active' ga qaytaradi — foydalanuvchi
-    testni qayta boshlay oladi. Shuningdek, orphan audio fayllarni tozalaydi.
-    """
+    """Har 5 daqiqada tiqilib qolgan 'processing' attemptlarni hisobot
+    navbatiga qayta qo'shadi va orphan audio fayllarni tozalaydi."""
     while True:
         await asyncio.sleep(300)  # 5 daqiqa
         try:
             async with SessionLocal() as session:
-                reset = await reset_stuck_processing(session)
+                requeued = await requeue_stuck_processing(session)
                 orphans = await delete_orphan_audios(session)
                 await session.commit()
-                if reset or orphans:
+                if requeued or orphans:
                     logger.info(
-                        "Periodic recovery: reset=%d orphans=%d",
-                        reset,
+                        "Periodic recovery: requeued=%d orphans=%d",
+                        requeued,
                         orphans,
                     )
         except Exception:
             logger.exception("Periodic stuck recovery failed")
+
+
+async def _startup_recovery() -> None:
+    """Ishga tushganda: test holati/invite tokenni DB dan yuklaydi va
+    oldingi ishga tushirishdan qolgan 'processing' attemptlarni darhol
+    navbatga qaytaradi (xotiradagi navbat restartda yo'qoladi)."""
+    from app.bot.test_state import load_test_state_from_db
+
+    try:
+        await load_test_state_from_db()
+    except Exception:
+        logger.exception("Test holatini DB dan yuklab bo'lmadi")
+
+    try:
+        async with SessionLocal() as session:
+            requeued = await requeue_stuck_processing(session, stale_minutes=0)
+            if requeued:
+                logger.info("Startup recovery: %d ta attempt navbatga qaytarildi", requeued)
+    except Exception:
+        logger.exception("Startup recovery failed")
 
 
 class DatabaseMiddleware(BaseMiddleware):
@@ -71,8 +88,10 @@ async def lifespan(app: FastAPI):
         setup_providers()
         start_report_workers()
 
+    await _startup_recovery()
+
     # Periodic stuck report recovery — har 5 daqiqada "processing" attemptlarni
-    # tekshiradi, 30+ daqiqa turganlarni "active" ga qaytaradi.
+    # tekshiradi, navbatda yo'qlarini qayta navbatga qo'shadi.
     recovery_task = asyncio.create_task(_periodic_stuck_recovery())
 
     yield

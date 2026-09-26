@@ -20,15 +20,17 @@ async def main() -> None:
     if dry_run:
         print("DRY-RUN rejimi: hech narsa o'chirilmaydi.\n")
         async with SessionLocal() as session:
-            stuck = await cleanup_service.reset_stuck_processing(session)
+            stuck = len(await cleanup_service.find_stuck_processing(session))
             old = await cleanup_service.delete_old_attempts(session)
             orphan = await cleanup_service.delete_orphan_audios(session)
-        print(f"Qaytariladi (processing->active): {stuck}")
+        print(f"Tiqilib qolgan (processing) attemptlar: {stuck}")
         print(f"O'chiriladigan eski attemptlar: {old['attempts']}")
         print(f"O'chiriladigan audio fayllar: {old['files'] + orphan}")
     else:
         async with SessionLocal() as session:
-            result = await cleanup_service.run_cleanup(session)
+            # Alohida process — hisobot navbati yo'q, stuck attemptlar
+            # faqat sanaladi (ular botning o'zida qayta navbatga qo'yiladi).
+            result = await cleanup_service.run_cleanup(session, requeue=False)
         print("Tozalash yakunlandi:")
         for key, value in result.items():
             print(f"  • {key}: {value}")
