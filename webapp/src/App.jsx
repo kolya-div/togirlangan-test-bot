@@ -381,7 +381,7 @@ export default function App() {
                     <div style={{ fontSize: 40, marginBottom: 12 }}>⏳</div>
                     <div style={{ fontWeight: 700, fontSize: 16 }}>Iltimos kutib turing</div>
                     <div style={{ color: 'var(--text-secondary)', marginTop: 8 }}>
-                        Javoblar 1 daqiqa ichida chiqadi. Telegram orqali ovozlar va xatoliklar yuboriladi.
+                        Javoblar 10 daqiqa ichida chiqadi. Telegram orqali ovozlar va xatoliklar yuboriladi.
                     </div>
                     {resultsPolling && (
                         <div style={{ marginTop: 12 }}>

@@ -994,8 +994,8 @@ async def cleanup_warning(callback: CallbackQuery) -> None:
         callback.message,
         text="🧹 <b>Eski ma'lumotlarni tozalash</b>\n\n"
         "Quyidagi ishlar bajariladi:\n"
-        "• <b>30 daqiqadan</b> ko'p 'processing' da tiqilib qolgan "
-        "attemptlar <b>active</b> ga qaytariladi\n"
+        "• <b>5 daqiqadan</b> ko'p 'processing' da tiqilib qolgan "
+        "attemptlar hisobot <b>navbatiga qayta qo'yiladi</b>\n"
         "• <b>30 kundan</b> eski attemptlar, ularning javoblari va "
         "audio fayllari o'chiriladi\n"
         "• Hech qanday javobga bog'lanmagan audio fayllar o'chiriladi\n\n"

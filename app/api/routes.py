@@ -671,7 +671,7 @@ async def finish_attempt(
                 telegram_user_id,
                 "✅ Test yakunlandi!\n\n"
                 "⏳ Javoblaringiz tahlil qilinmoqda.\n"
-                "Javoblar 5 daqiqa ichida chiqadi. "
+                "Javoblar 10 daqiqa ichida chiqadi. "
                 "Telegram orqali yuboriladi.",
             )
         except Exception as e:
@@ -699,7 +699,7 @@ async def notify_attempt_closed(
 ) -> dict:
     """
     WebApp dagi 'Yopish' tugmasi bosilganda foydalanuvchiga
-    Telegram orqali javoblar 5 daqiqa ichida chiqishini bildiradi.
+    Telegram orqali javoblar 10 daqiqa ichida chiqishini bildiradi.
 
     user_id FAQAT validatsiya qilingan init_data dan olinadi (Telegram
     HMAC imzosi bilan tasdiqlangan). Faqat o'z attemptiga notification
@@ -737,7 +737,7 @@ async def notify_attempt_closed(
                 user.telegram_id,
                 "✅ Test yakunlandi!\n\n"
                 "⏳ Javoblaringiz tahlil qilinmoqda.\n"
-                "Javoblar 5 daqiqa ichida chiqadi. "
+                "Javoblar 10 daqiqa ichida chiqadi. "
                 "Telegram orqali yuboriladi.",
             )
         except Exception as e:
