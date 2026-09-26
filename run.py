@@ -192,36 +192,146 @@ async def daily_export_wipe_task():
 # ──────────────────────────────────────────
 # VITE FRONTEND (subprocess ichida)
 # ──────────────────────────────────────────
-def start_vite():
-    """Vite dev serverni alohida subprocess da ishga tushiradi."""
-    webapp_dir = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)),
-        "webapp",
-    )
+WEBAPP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "webapp")
 
-    if not os.path.isdir(webapp_dir):
-        logger.warning("⚠️ webapp/ papka topilmadi, frontend ishga tushirilmadi.")
+# npm install / build uchun maksimal kutish (soniya)
+NPM_INSTALL_TIMEOUT = 600
+NPM_BUILD_TIMEOUT = 300
+
+
+def _find_npm() -> str | None:
+    import shutil
+
+    npm_command = "npm.cmd" if sys.platform == "win32" else "npm"
+    return shutil.which(npm_command)
+
+
+def _mtime(path: str) -> float:
+    try:
+        return os.path.getmtime(path)
+    except OSError:
+        return 0.0
+
+
+def _newest_mtime(paths: list[str]) -> float:
+    """Fayllar va papkalar (ichidagi fayllar bilan) orasidagi eng yangi mtime."""
+    newest = 0.0
+    for path in paths:
+        if os.path.isdir(path):
+            for root, _dirs, files in os.walk(path):
+                for name in files:
+                    newest = max(newest, _mtime(os.path.join(root, name)))
+        else:
+            newest = max(newest, _mtime(path))
+    return newest
+
+
+def _npm_install_needed() -> bool:
+    """node_modules yo'q yoki package.json/package-lock.json undan yangiroq."""
+    # npm install har safar node_modules/.package-lock.json ni yangilaydi
+    marker = os.path.join(WEBAPP_DIR, "node_modules", ".package-lock.json")
+    if not os.path.exists(marker):
+        return True
+    manifest_mtime = _newest_mtime([
+        os.path.join(WEBAPP_DIR, "package.json"),
+        os.path.join(WEBAPP_DIR, "package-lock.json"),
+    ])
+    return manifest_mtime > _mtime(marker)
+
+
+def _npm_build_needed() -> bool:
+    """webapp/dist yo'q yoki manba fayllar dist dan yangiroq."""
+    dist_index = os.path.join(WEBAPP_DIR, "dist", "index.html")
+    if not os.path.exists(dist_index):
+        return True
+    sources_mtime = _newest_mtime([
+        os.path.join(WEBAPP_DIR, "src"),
+        os.path.join(WEBAPP_DIR, "index.html"),
+        os.path.join(WEBAPP_DIR, "vite.config.ts"),
+        os.path.join(WEBAPP_DIR, "package.json"),
+    ])
+    return sources_mtime > _mtime(dist_index)
+
+
+def _run_npm(npm_path: str, args: list[str], timeout: int) -> bool:
+    """npm buyrug'ini webapp/ ichida bajaradi. Muvaffaqiyatli bo'lsa True."""
+    cmd = " ".join(["npm", *args])
+    logger.info(f"📦 {cmd} bajarilmoqda...")
+    try:
+        result = subprocess.run(
+            [npm_path, *args],
+            cwd=WEBAPP_DIR,
+            stdout=sys.stdout,
+            stderr=sys.stderr,
+            timeout=timeout,
+            shell=False,
+        )
+    except subprocess.TimeoutExpired:
+        logger.error(f"❌ {cmd} {timeout} soniyada tugamadi.")
+        return False
+    except Exception as e:
+        logger.error(f"❌ {cmd} xato: {e}")
+        return False
+
+    if result.returncode != 0:
+        logger.error(f"❌ {cmd} xato bilan tugadi (kod {result.returncode}).")
+        return False
+
+    logger.info(f"✅ {cmd} tugadi.")
+    return True
+
+
+def prepare_webapp() -> str | None:
+    """Kerak bo'lsa `npm install` va `npm run build` ni avtomatik bajaradi.
+
+    - node_modules yo'q yoki package*.json o'zgargan bo'lsa → npm install
+    - webapp/dist yo'q yoki src/ o'zgargan bo'lsa → npm run build
+      (FastAPI WebApp'ni webapp/dist dan xizmat qiladi — ngrok orqali
+      Telegram aynan shuni ochadi)
+
+    Qaytaradi: npm yo'li (dev server uchun) yoki npm/webapp yo'q bo'lsa None.
+    """
+    if not os.path.isdir(WEBAPP_DIR):
+        logger.warning("⚠️ webapp/ papka topilmadi, frontend tayyorlanmadi.")
+        return None
+
+    npm_path = _find_npm()
+    if not npm_path:
+        logger.warning(
+            "⚠️ npm topilmadi — Node.js o'rnating (https://nodejs.org). "
+            "npm install / build avtomatik bajarilmadi."
+        )
+        return None
+
+    logger.info(f"🔎 npm topildi: {npm_path}")
+
+    if _npm_install_needed():
+        if not _run_npm(npm_path, ["install"], NPM_INSTALL_TIMEOUT):
+            return None
+    else:
+        logger.info("✅ npm paketlar allaqachon o'rnatilgan.")
+
+    if _npm_build_needed():
+        _run_npm(npm_path, ["run", "build"], NPM_BUILD_TIMEOUT)
+    else:
+        logger.info("✅ webapp/dist dolzarb.")
+
+    return npm_path
+
+
+def start_vite(npm_path: str | None) -> None:
+    """Vite dev serverni alohida subprocess da ishga tushiradi."""
+    if not npm_path:
+        logger.warning(
+            "⚠️ Vite dev-server ishga tushmaydi. webapp/dist mavjud bo'lsa "
+            "FastAPI http://localhost:8000 da xizmat qiladi."
+        )
         return
 
     try:
-        npm_command = "npm.cmd" if sys.platform == "win32" else "npm"
-
-        import shutil
-        npm_path = shutil.which(npm_command)
-
-        if not npm_path:
-            logger.warning(
-                "⚠️ npm topilmadi — Vite dev-server ishga tushmaydi. "
-                "webapp/dist oldindan build qilingan va FastAPI "
-                "http://localhost:8000 da xizmat qiladi."
-            )
-            return
-
-        logger.info(f"🔎 npm topildi: {npm_path}")
-
         subprocess.Popen(
             [npm_path, "run", "dev"],
-            cwd=webapp_dir,
+            cwd=WEBAPP_DIR,
             stdout=sys.stdout,
             stderr=sys.stderr,
             shell=False,
@@ -239,6 +349,12 @@ def start_vite():
 # ASOSIY ISHGA TUSHIRISH — Bitta event loop
 # ──────────────────────────────────────────
 async def main():
+    # 0. Frontend: kerak bo'lsa npm install + build. app.main import
+    # qilinishidan OLDIN bajariladi — u webapp/dist ni import paytida
+    # tekshiradi. Sinxron subprocess thread'da ishlaydi (loop bloklanmaydi).
+    logger.info("🌐 Frontend tayyorlanmoqda...")
+    npm_path = await asyncio.to_thread(prepare_webapp)
+
     from app.main import app
     from app.bot.bot import bot, dp
     from app.bot.handlers import handlers_router
@@ -265,9 +381,9 @@ async def main():
     # 5. Cache cleanup task
     asyncio.create_task(cleanup_task(interval=300))  # 5 minutes
 
-    # 6. Vite frontendni ishga tushirish
+    # 6. Vite dev serverni ishga tushirish
     logger.info("🌐 Frontend (Vite) ishga tushmoqda...")
-    start_vite()
+    start_vite(npm_path)
 
     # 7. Ngrok tunnelni ishga tushirish
     start_ngrok()
