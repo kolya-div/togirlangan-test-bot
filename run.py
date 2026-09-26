@@ -147,6 +147,23 @@ async def _export_and_wipe() -> None:
             logger.info("✅ Kunlik eksport+wipe tugallandi: %s", result)
     except Exception as e:
         logger.exception("❌ Kunlik eksport+wipe xato: %s", e)
+        await _notify_admins_export_failed(e)
+
+
+async def _notify_admins_export_failed(error: Exception) -> None:
+    """Kunlik hisobot yaratilmasa — adminlar bilsin (baza tozalanmagan)."""
+    from app.services.telegram_sender import telegram_sender
+
+    for admin_id in settings.admin_id_list:
+        try:
+            await telegram_sender.send_message(
+                admin_id,
+                "⚠️ Kunlik Word hisobot yaratilmadi. Baza tozalanmadi — "
+                "ma'lumotlar saqlanib qoldi.\n"
+                f"Xato: {type(error).__name__}",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Admin %s ga xabar yuborilmadi: %s", admin_id, exc)
 
 
 async def daily_midnight_task():

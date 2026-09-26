@@ -137,3 +137,28 @@ async def test_seconds_until_tashkent_midnight():
     fake_now = datetime(2026, 9, 26, 0, 0, tzinfo=timezone.utc).astimezone(tz)
     with patch.object(helpers, "local_now", return_value=fake_now):
         assert helpers.seconds_until_local_midnight() == 19 * 3600
+
+
+@pytest.mark.anyio
+async def test_control_characters_do_not_break_report(tmp_path):
+    async with TestSessionLocal() as session:
+        user = User(telegram_id=777003, full_name="Ali\x0b Bad", is_registered=True)
+        q = Question(section="1", order_number=1, text="Soru\x1f?")
+        session.add_all([user, q])
+        await session.flush()
+        attempt = TestAttempt(user_id=user.id, status="finished", score=40, level="B1")
+        session.add(attempt)
+        await session.flush()
+        session.add(Answer(
+            attempt_id=attempt.id, question_id=q.id, score=50,
+            transcript="Merhaba\x08 dünya",
+            feedback=json.dumps({"mistakes": [{"original": "a\x01", "correct": "b"}]}),
+        ))
+        await session.commit()
+
+    async with TestSessionLocal() as session:
+        path = await export_users_report(session, tmp_path / "bad.docx")
+
+    text = _docx_text(path)
+    assert "Ali Bad" in text
+    assert "Merhaba dünya" in text

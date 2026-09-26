@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -137,6 +138,19 @@ async def _collect_answers(
     return by_attempt
 
 
+# XML (Word) da ruxsat etilmagan boshqaruv belgilari: \t, \n, \r dan tashqari.
+# Bitta shunday belgi (ism yoki AI transkriptida) python-docx'da ValueError
+# beradi va butun kunlik hisobot yuborilmay qoladi.
+_XML_INVALID_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]")
+
+
+def _clean(value: Any) -> str:
+    """Matnni Word uchun xavfsiz qiladi."""
+    if value is None:
+        return ""
+    return _XML_INVALID_RE.sub("", str(value))
+
+
 def _fmt_dt(value) -> str:
     local = to_local(value)
     return local.strftime("%Y-%m-%d %H:%M") if local else "*"
@@ -162,26 +176,28 @@ def _add_answers_section(doc, rows: list[dict[str, Any]]) -> None:
     for row in with_answers:
         score = f"{row['score']}/75" if row["score"] is not None else "—"
         doc.add_heading(
-            f"{row['full_name']} (@{row['username']}, ID {row['telegram_id']}) — "
-            f"ball: {score}, daraja: {row['level'] or '—'}",
+            _clean(
+                f"{row['full_name']} (@{row['username']}, ID {row['telegram_id']}) — "
+                f"ball: {score}, daraja: {row['level'] or '—'}"
+            ),
             level=2,
         )
 
         for idx, item in enumerate(row["answers"], start=1):
             q = doc.add_paragraph()
             q.add_run(
-                f"{idx}. Savol ({item['section']}.{item['order_number']}): "
+                _clean(f"{idx}. Savol ({item['section']}.{item['order_number']}): ")
             ).font.bold = True
-            q.add_run(item["question"])
+            q.add_run(_clean(item["question"]))
 
             said = doc.add_paragraph()
             said.add_run("Aytgani: ").font.bold = True
-            said.add_run(item["transcript"] or "(transkripsiya qilinmadi)")
+            said.add_run(_clean(item["transcript"]) or "(transkripsiya qilinmadi)")
 
             if item["corrected_text"] and item["corrected_text"] != item["transcript"]:
                 corrected = doc.add_paragraph()
                 corrected.add_run("To'g'ri varianti: ").font.bold = True
-                corrected.add_run(item["corrected_text"])
+                corrected.add_run(_clean(item["corrected_text"]))
 
             mistakes = [m for m in item["mistakes"] if isinstance(m, dict)]
             if mistakes:
@@ -193,7 +209,7 @@ def _add_answers_section(doc, rows: list[dict[str, Any]]) -> None:
                     explanation = m.get("explanation_uz") or m.get("explanation")
                     if explanation:
                         line += f" — {explanation}"
-                    doc.add_paragraph(line, style="List Bullet")
+                    doc.add_paragraph(_clean(line), style="List Bullet")
 
             score_p = doc.add_paragraph()
             score_p.add_run("Ball: ").font.bold = True
@@ -253,15 +269,15 @@ def build_report_docx(
         cells = table.add_row().cells
         cells[0].text = str(idx)
         cells[1].text = str(row["telegram_id"])
-        cells[2].text = row["full_name"] or "—"
-        cells[3].text = row["username"] or "—"
-        cells[4].text = row["phone"] or "—"
+        cells[2].text = _clean(row["full_name"]) or "—"
+        cells[3].text = _clean(row["username"]) or "—"
+        cells[4].text = _clean(row["phone"]) or "—"
         cells[5].text = _fmt_dt(row["created_at"])
-        cells[6].text = row["status"] or "—"
+        cells[6].text = _clean(row["status"]) or "—"
         cells[7].text = _fmt_dt(row["started_at"])
         cells[8].text = _fmt_dt(row["finished_at"])
         cells[9].text = str(row["score"]) if row["score"] is not None else "—"
-        cells[10].text = row["level"] or "—"
+        cells[10].text = _clean(row["level"]) or "—"
 
     _add_answers_section(doc, rows)
 
