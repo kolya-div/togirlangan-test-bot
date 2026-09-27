@@ -1,7 +1,7 @@
 aiogram>=3.20,<4.0
 fastapi>=0.115
 uvicorn[standard]>=0.34
-sqlalchemy>=2.0
+sqlalchemy[asyncio]>=2.0
 asyncpg>=0.29
 pydantic>=2.10
 pydantic-settings>=2.7
