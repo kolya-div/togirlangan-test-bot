@@ -171,11 +171,17 @@ async def delete_orphan_audios(session: AsyncSession) -> int:
     referenced = {p.replace("\\", "/") for p in referenced}
 
     audios_dir = Path(settings.upload_dir)
+    # Savol rasmlari (docx dan) shu papka ichida saqlanadi, lekin ular
+    # javobga bog'lanmaydi — "yetim" deb o'chirilardi va savollarni
+    # yuklagandan ~10 daqiqa o'tib WebApp'da rasmlar chiqmay qolardi.
+    images_dir = audios_dir / "images"
     now = time.time()
     orphan_paths = []
     if audios_dir.exists():
         for file in audios_dir.rglob("*"):
             if not file.is_file():
+                continue
+            if images_dir in file.parents:
                 continue
             relative = str(file).replace("\\", "/")
             if relative in referenced:
