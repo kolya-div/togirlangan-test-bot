@@ -18,14 +18,24 @@ async def main() -> None:
     dry_run = "--dry-run" in sys.argv
 
     if dry_run:
-        print("DRY-RUN rejimi: hech narsa o'chirilmaydi.\n")
+        # Faqat sanaydi: fayllar va DB ga tegmaydi (oldin delete_* chaqirilib,
+        # dry-run'da ham audio fayllar haqiqatan o'chirilardi).
+        from datetime import timedelta
+
+        from sqlalchemy import func, select
+
+        from app.database.models import TestAttempt
+        from app.utils.helpers import utcnow
+
         async with SessionLocal() as session:
             stuck = len(await cleanup_service.find_stuck_processing(session))
-            old = await cleanup_service.delete_old_attempts(session)
-            orphan = await cleanup_service.delete_orphan_audios(session)
+            old_before = utcnow() - timedelta(days=cleanup_service.DELETE_OLDER_DAYS)
+            old = (await session.execute(
+                select(func.count()).select_from(TestAttempt)
+                .where(TestAttempt.started_at < old_before)
+            )).scalar()
         print(f"Tiqilib qolgan (processing) attemptlar: {stuck}")
-        print(f"O'chiriladigan eski attemptlar: {old['attempts']}")
-        print(f"O'chiriladigan audio fayllar: {old['files'] + orphan}")
+        print(f"O'chiriladigan eski attemptlar (audio arxivga olinadi): {old}")
     else:
         async with SessionLocal() as session:
             # Alohida process — hisobot navbati yo'q, stuck attemptlar

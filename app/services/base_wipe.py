@@ -1,28 +1,18 @@
 import logging
-from pathlib import Path
 from typing import Any
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.models import Answer, Question, TestAttempt, TestSettings, User
+from app.services.audio_archive import (
+    archive_attempt_audios,
+    archive_question_images,
+    new_archive_dir,
+)
 from app.utils.helpers import utcnow
 
 logger = logging.getLogger(__name__)
-
-
-def _delete_files(paths: list[str]) -> int:
-    """Fayllarni o'chirib, qancha muvaffaqiyatli o'chirilganini qaytaradi."""
-    deleted = 0
-    for path in paths:
-        try:
-            file = Path(path)
-            if file.exists() and file.is_file():
-                file.unlink()
-                deleted += 1
-        except OSError:
-            logger.warning("Fayl o'chirilmadi: %s", path)
-    return deleted
 
 
 async def count_rows(session: AsyncSession) -> dict[str, int]:
@@ -51,13 +41,15 @@ async def wipe_user_data(session: AsyncSession) -> dict[str, Any]:
       - users, test_attempts, answers (foydalanuvchi va test ma'lumoti)
       - questions (savol bazasi — admin yangilarini yuklaydi)
       - test_settings (test holati/is_active/invite_token)
-    Qo'shimcha: barcha audio fayllar ham o'chiriladi.
+    Audio fayllar o'chirilmaydi — data/archive/<sana>_kunlik/ ga ko'chiriladi,
+    savol rasmlarining nusxasi ham shu yerga olinadi.
 
     BU TOZALASHDAN OLDIN .docx EKSPORT QILINIShI SHART (daily_export_wipe
     kafolatlaydi: kamida bitta admin faylni olmasa wipe bajarilmaydi).
 
     Qaytaradi: {users, attempts, answers, questions, test_settings,
-    audio_files, at} — o'chirilgan amallar soni hisoboti.
+    audio_files, images, archive_dir, at} — hisobot (audio_files —
+    arxivga ko'chirilgan audio soni).
     """
     result = {
         "users": 0,
@@ -69,9 +61,13 @@ async def wipe_user_data(session: AsyncSession) -> dict[str, Any]:
         "at": utcnow(),
     }
 
-    # Javoblarni o'chirishdan AVVAL audio fayllar yo'llarini yig'ib olamiz.
-    audio_res = await session.execute(select(Answer.audio_path))
-    audio_paths = [p for (p,) in audio_res.all() if p]
+    # Audio fayllar O'CHIRILMAYDI — javoblar o'chirilishidan AVVAL
+    # sana/foydalanuvchi bo'yicha arxivga ko'chiriladi, savol rasmlarining
+    # nusxasi ham olinadi (qarang: audio_archive).
+    archive_dir = new_archive_dir("kunlik")
+    result["audio_files"] = await archive_attempt_audios(session, archive_dir)
+    result["images"] = archive_question_images(archive_dir)
+    result["archive_dir"] = str(archive_dir)
 
     result["users"] = (
         await session.execute(select(func.count()).select_from(User))
@@ -98,10 +94,9 @@ async def wipe_user_data(session: AsyncSession) -> dict[str, Any]:
 
     await session.commit()
 
-    result["audio_files"] = _delete_files(audio_paths)
     logger.info(
         "Wipe tugallandi: %s user, %s attempt, %s answer, %s question, "
-        "%s test_settings, %s audio fayl",
+        "%s test_settings, %s audio arxivlandi",
         result["users"], result["attempts"], result["answers"],
         result["questions"], result["test_settings"], result["audio_files"],
     )

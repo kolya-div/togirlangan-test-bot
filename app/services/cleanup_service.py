@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database.models import Answer, TestAttempt
+from app.services.audio_archive import archive_attempt_audios, new_archive_dir
 from app.utils.helpers import utcnow
 
 logger = logging.getLogger(__name__)
@@ -128,7 +129,7 @@ async def _notify_admins_requeue_limit(attempt_ids: list[int]) -> None:
 
 
 async def delete_old_attempts(session: AsyncSession) -> dict:
-    """Eski attemptlarni javob va audio fayllari bilan o'chirish."""
+    """Eski attemptlarni javoblari bilan o'chirish (audio arxivlanadi)."""
     old_before = utcnow() - timedelta(days=DELETE_OLDER_DAYS)
     result = await session.execute(
         select(TestAttempt).where(TestAttempt.started_at < old_before)
@@ -138,18 +139,17 @@ async def delete_old_attempts(session: AsyncSession) -> dict:
 
     deleted_files = 0
     if ids:
-        audio_res = await session.execute(
-            select(Answer.audio_path).where(Answer.attempt_id.in_(ids))
+        # Audio o'chirilmaydi — arxivga ko'chiriladi
+        deleted_files = await archive_attempt_audios(
+            session, new_archive_dir("eski_testlar"), ids,
         )
-        audio_paths = [path for (path,) in audio_res.all() if path]
 
         await session.execute(delete(Answer).where(Answer.attempt_id.in_(ids)))
         await session.execute(delete(TestAttempt).where(TestAttempt.id.in_(ids)))
 
-        deleted_files = _delete_files(audio_paths)
         logger.info(
-            "Deleted %s old attempts (%s audio refs, %s files)",
-            len(ids), len(audio_paths), deleted_files,
+            "Deleted %s old attempts (%s audio files archived)",
+            len(ids), deleted_files,
         )
 
     return {
@@ -248,7 +248,8 @@ async def run_cleanup(session: AsyncSession, requeue: bool = True) -> dict:
     return {
         "requeued_stuck": stuck_count,
         "deleted_attempts": old_result["attempts"],
-        "deleted_audio_files": old_result["files"] + orphan_files,
+        "archived_audio_files": old_result["files"],
+        "deleted_orphan_files": orphan_files,
     }
 
 
@@ -256,7 +257,8 @@ async def delete_user_attempts(
     session: AsyncSession,
     user_id: int,
 ) -> dict:
-    """Foydalanuvchining barcha attemptlarini (javob va audio bilan) o'chirish.
+    """Foydalanuvchining barcha attemptlarini javoblari bilan o'chirish
+    (audio fayllar arxivga ko'chiriladi).
 
     Blokdan chiqarish uchun ishlatiladi — keyin foydalanuvchi
     yangidan test topshira oladi.
@@ -269,17 +271,16 @@ async def delete_user_attempts(
 
     deleted_files = 0
     if ids:
-        audio_res = await session.execute(
-            select(Answer.audio_path).where(Answer.attempt_id.in_(ids))
+        # Audio o'chirilmaydi — arxivga ko'chiriladi
+        deleted_files = await archive_attempt_audios(
+            session, new_archive_dir("blokdan_chiqarilgan"), ids,
         )
-        audio_paths = [path for (path,) in audio_res.all() if path]
 
         await session.execute(delete(Answer).where(Answer.attempt_id.in_(ids)))
         await session.execute(delete(TestAttempt).where(TestAttempt.id.in_(ids)))
-        deleted_files = _delete_files(audio_paths)
 
         logger.info(
-            "Deleted %s attempts for user %s (%s audio files)",
+            "Deleted %s attempts for user %s (%s audio files archived)",
             len(ids), user_id, deleted_files,
         )
 

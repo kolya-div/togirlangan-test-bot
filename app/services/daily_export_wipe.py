@@ -61,7 +61,8 @@ async def run_daily_export_and_wipe() -> dict | None:
     2. Adminlarning KAMIDA BITTASIGA muvaffaqiyatli yuborilishi sharti bilan
        (admin_id_list bo'sh bo'lmasa va kamida 1 ta yuborilsa) bazani
        `wipe_user_data` orqali TO'LIQ tozalaydi (users, attempts, answers,
-       questions, test_settings, audio fayllar — 0 qoldirmaydi).
+       questions, test_settings). Audio fayllar va savol rasmlari
+       o'chirilmaydi — data/archive/ ga saqlanadi.
     3. Tozalash muvaffaqiyatli bo'lsa — yuborilgan faylni o'chiradi.
        Tozalash muvaffaqiyatsiz bo'lsa — fayl saqlanib qoladi (zaxira nusxa).
 
@@ -114,10 +115,11 @@ async def run_daily_export_and_wipe() -> dict | None:
                 logger.warning("Hisobot fayli o'chirilmadi: %s", report_path)
 
             await _notify_admins_text(
-                "✅ Kunlik hisobot yuborildi va baza to'liq tozalandi "
+                "✅ Kunlik hisobot yuborildi va baza tozalandi "
                 "(users={users}, attempts={attempts}, answers={answers}, "
-                "questions={questions}, test_settings={test_settings}, "
-                "audio={audio_files}).".format(**wiped)
+                "questions={questions}, test_settings={test_settings}).\n"
+                "🎧 {audio_files} ta audio va {images} ta savol rasmi "
+                "arxivda saqlandi: {archive_dir}".format(**wiped)
             )
             return wiped
 

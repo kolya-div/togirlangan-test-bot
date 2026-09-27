@@ -55,6 +55,11 @@ from app.database.repositories import (
     search_users,
     get_user_attempts,
 )
+from app.services.audio_archive import (
+    archive_attempt_audios,
+    archive_question_images,
+    new_archive_dir,
+)
 from app.services.cleanup_service import run_cleanup, delete_user_attempts
 from app.services.daily_export_wipe import (
     ExportBusyError,
@@ -881,8 +886,8 @@ async def unblock_user_handler(
         text="🔓 Foydalanuvchini blokdan chiqarish\n\n"
         "Foydalanuvchining Telegram ID sini yuboring:\n"
         "Masalan: 8834710739\n\n"
-        "⚠️ Uning barcha testlari, javoblari va audio fayllari "
-        "o'chiriladi — qayta topshira oladi.",
+        "⚠️ Uning barcha testlari va javoblari o'chiriladi "
+        "(audio fayllari arxivda saqlanadi) — qayta topshira oladi.",
         reply_markup=back_button("results"),
     )
     await callback.answer()
@@ -917,7 +922,7 @@ async def process_unblock_user(
         f"👤 {user.full_name or '—'} (@{user.username or '—'})\n"
         f"tg: {user.telegram_id}\n"
         f"Testlar soni: {len(attempts)}\n\n"
-        "Barcha testlari va audio fayllari o'chiriladi.\n"
+        "Barcha testlari o'chiriladi, audio fayllari arxivga olinadi.\n"
         "U yangidan test topshira oladi. Davom etasizmi?",
         reply_markup=unblock_confirm_keyboard(telegram_id),
     )
@@ -960,7 +965,7 @@ async def unblock_confirm(
         callback.message,
         text=f"✅ {telegram_id} foydalanuvchi blokdan chiqarildi.\n\n"
         f"O'chirilgan testlar: {deleted['attempts']}\n"
-        f"O'chirilgan audio fayllar: {deleted['files']}\n\n"
+        f"Arxivga olingan audio fayllar: {deleted['files']}\n\n"
         "Endi u yangidan test topshira oladi.",
         reply_markup=results_menu(),
     )
@@ -1042,9 +1047,10 @@ async def cleanup_warning(callback: CallbackQuery) -> None:
         "Quyidagi ishlar bajariladi:\n"
         "• <b>5 daqiqadan</b> ko'p 'processing' da tiqilib qolgan "
         "attemptlar hisobot <b>navbatiga qayta qo'yiladi</b>\n"
-        "• <b>30 kundan</b> eski attemptlar, ularning javoblari va "
-        "audio fayllari o'chiriladi\n"
-        "• Hech qanday javobga bog'lanmagan audio fayllar o'chiriladi\n\n"
+        "• <b>30 kundan</b> eski attemptlar va javoblari o'chiriladi "
+        "(audio fayllari <b>arxivga olinadi</b>)\n"
+        "• Hech qanday javobga bog'lanmagan (chala yuklangan) audio "
+        "fayllar o'chiriladi\n\n"
         "Davom etasizmi?",
         reply_markup=cleanup_confirm_keyboard(),
         parse_mode="HTML",
@@ -1078,7 +1084,8 @@ async def cleanup_confirm(
         text="🧹 <b>Tozalash yakunlandi</b>\n\n"
         f"• Qayta navbatga qo'yilgan attemptlar: <b>{result['requeued_stuck']}</b>\n"
         f"• O'chirilgan eski attemptlar: <b>{result['deleted_attempts']}</b>\n"
-        f"• O'chirilgan audio fayllar: <b>{result['deleted_audio_files']}</b>",
+        f"• Arxivga olingan audio fayllar: <b>{result['archived_audio_files']}</b>\n"
+        f"• O'chirilgan chala audio fayllar: <b>{result['deleted_orphan_files']}</b>",
         reply_markup=results_menu(),
         parse_mode="HTML",
     )
@@ -1119,8 +1126,8 @@ async def reset_db_warning(callback: CallbackQuery) -> None:
     await _safe_edit(
         callback.message,
         text="⚠️ Diqqat!\n\n"
-        "Barcha foydalanuvchilar, natijalar va audio fayllar "
-        "o'chiriladi.\nBu amalni ortga qaytarib bo'lmaydi.",
+        "Barcha foydalanuvchilar va natijalar o'chiriladi "
+        "(audio fayllar arxivga olinadi).\nBu amalni ortga qaytarib bo'lmaydi.",
         reply_markup=confirm_reset_keyboard(),
     )
     await callback.answer()
@@ -1145,11 +1152,17 @@ async def reset_confirm(
         await callback.answer("Ruxsat yo'q", show_alert=True)
         return
 
+    # Audio fayllar o'chirilmaydi: javoblar o'chirilishidan oldin arxivga
+    # ko'chiriladi (aks holda "yetim audio" tozalashi ularni o'chirardi).
+    archive_dir = new_archive_dir("reset")
+    archived = await archive_attempt_audios(session, archive_dir)
+    archive_question_images(archive_dir)
+
     await delete_all_data(session)
 
     await _safe_edit(
         callback.message,
-        text="✅ Baza tozalandi.",
+        text=f"✅ Baza tozalandi.\n🎧 {archived} ta audio arxivda saqlandi.",
         reply_markup=admin_menu(),
     )
     await callback.answer()

@@ -132,7 +132,8 @@ async def _reset_daily_limit() -> None:
 
 async def _export_and_wipe() -> None:
     """.docx hisobotni adminlarga yuborib, bazani TO'LIQ tozalaydi
-    (users, attempts, answers, questions, test_settings, audio fayllar).
+    (users, attempts, answers, questions, test_settings). Audio fayllar va
+    savol rasmlari o'chirilmaydi — data/archive/ ga saqlanadi.
 
     Xavfsizlik: wipe faqat adminlarning kamida bittasi hisobot faylini
     olgan taqdirda bajariladi (daily_export_wipe ichida kafolatlangan).
