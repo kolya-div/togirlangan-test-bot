@@ -57,6 +57,14 @@ async def get_db():
         yield session
 
 
+# Natijalar (ball, xatolar, transkript) foydalanuvchiga YUBORILMAYDI —
+# ular faqat admin oladigan .docx hisobotda (kunlik va qo'lda eksport).
+FINISH_MESSAGE = (
+    "✅ Test yakunlandi!\n\n"
+    "Javoblaringiz qabul qilindi. Rahmat!"
+)
+
+
 async def _send_telegram(telegram_id: int, text: str) -> None:
     """TelegramSender orqali xabar yuboradi — retry, 429, timeout bilan."""
     from app.services.telegram_sender import telegram_sender
@@ -669,10 +677,7 @@ async def finish_attempt(
         try:
             await _send_telegram(
                 telegram_user_id,
-                "✅ Test yakunlandi!\n\n"
-                "⏳ Javoblaringiz tahlil qilinmoqda.\n"
-                "Javoblar 10 daqiqa ichida chiqadi. "
-                "Telegram orqali yuboriladi.",
+                FINISH_MESSAGE,
             )
         except Exception as e:
             logger.warning("Foydalanuvchiga xabar yuborib bo'lmadi (tg=%s): %s", telegram_user_id, e)
@@ -699,7 +704,7 @@ async def notify_attempt_closed(
 ) -> dict:
     """
     WebApp dagi 'Yopish' tugmasi bosilganda foydalanuvchiga
-    Telegram orqali javoblar 10 daqiqa ichida chiqishini bildiradi.
+    Telegram orqali test yakunlangani va javoblar qabul qilinganini bildiradi.
 
     user_id FAQAT validatsiya qilingan init_data dan olinadi (Telegram
     HMAC imzosi bilan tasdiqlangan). Faqat o'z attemptiga notification
@@ -735,10 +740,7 @@ async def notify_attempt_closed(
         try:
             await _send_telegram(
                 user.telegram_id,
-                "✅ Test yakunlandi!\n\n"
-                "⏳ Javoblaringiz tahlil qilinmoqda.\n"
-                "Javoblar 10 daqiqa ichida chiqadi. "
-                "Telegram orqali yuboriladi.",
+                FINISH_MESSAGE,
             )
         except Exception as e:
             logger.warning(f"Yopish xabari yuborilmadi (tg={user.telegram_id}): {e}")
@@ -790,6 +792,11 @@ async def get_attempt_results(
                 status_code=403,
                 detail="Bu test sizga tegishli emas.",
             )
+
+        # Foydalanuvchi natijani ko'rmaydi — faqat test holati. Batafsil
+        # natija (ball, xatolar) faqat adminga (.docx hisobotda).
+        if user_id not in settings.admin_id_list:
+            return {"attempt_id": attempt_id, "status": attempt.status}
 
         answers = (
             await session.execute(
@@ -865,13 +872,16 @@ async def get_attempt_status(
 
         # Agar attempt allaqachon finished bo'lsa — to'g'ridan-to'g'ri qaytar
         if attempt.status == "finished":
-            return {
+            data = {
                 "attempt_id": attempt_id,
                 "status": "completed",
-                "score": attempt.score,
-                "level": attempt.level,
                 "progress_pct": 100,
             }
+            # Ball/daraja foydalanuvchiga ko'rsatilmaydi — faqat adminga
+            if user_id in settings.admin_id_list:
+                data["score"] = attempt.score
+                data["level"] = attempt.level
+            return data
 
         # Job tracker'dan real-vaqt status olish
         job = await job_tracker.get_job(attempt_id)

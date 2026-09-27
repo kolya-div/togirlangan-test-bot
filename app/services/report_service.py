@@ -19,7 +19,7 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.database.database import SessionLocal
-from app.database.models import Answer, Question, TestAttempt, User
+from app.database.models import Answer, Question, TestAttempt
 from app.services.evaluation_service import evaluate_answer
 from app.services.transcription_service import transcribe_audio
 
@@ -59,8 +59,6 @@ async def _process_attempt_and_report_inner(attempt_id: int) -> None:
         if not attempt:
             logger.error("Hisobot: attempt #%d topilmadi", attempt_id)
             return
-
-        user = await session.get(User, attempt.user_id)
 
         answers = (
             await session.execute(
@@ -156,7 +154,6 @@ async def _process_attempt_and_report_inner(attempt_id: int) -> None:
 
         scored = [item["score"] for item in ordered if item["score"] is not None]
 
-        points_map: dict[int, dict] = {}
         raw_earned = 0
         raw_possible = 0
         for item in ordered:
@@ -166,16 +163,12 @@ async def _process_attempt_and_report_inner(attempt_id: int) -> None:
                 earned = round((item["score"] or 0) * pts / 100) if item["score"] is not None else 0
                 raw_earned += earned
                 raw_possible += pts
-            else:
-                earned = None
-            points_map[item["id"]] = {"pts": pts, "earned": earned}
 
         if raw_possible > 0:
             total_earned = round(raw_earned * MAX_TOTAL_POINTS / raw_possible)
         else:
             avg = round(sum(scored) / len(scored)) if scored else 0
             total_earned = round(avg * MAX_TOTAL_POINTS / 100)
-        total_possible = MAX_TOTAL_POINTS
 
         attempt = await session.get(TestAttempt, attempt_id)
         if attempt:
@@ -184,23 +177,10 @@ async def _process_attempt_and_report_inner(attempt_id: int) -> None:
             attempt.status = "finished"
             await session.commit()
 
-    # ─── 4-QADAM: Telegram hisobot — SESSION YO'Q ───────────────
-    if user is None:
-        logger.warning("Hisobot: attempt #%d uchun user topilmadi", attempt_id)
-        return
-
-    try:
-        await _send_report(
-            user.telegram_id,
-            ordered,
-            questions,
-            total_earned,
-            total_possible,
-            points_map,
-            attempt_id=attempt_id,
-        )
-    except Exception as e:
-        logger.error("Hisobot yuborishda xato (tg=%s): %s", user.telegram_id, e)
+    # Natijalar foydalanuvchiga Telegram orqali YUBORILMAYDI — ular
+    # bazada saqlanadi va faqat admin .docx hisobotida chiqadi
+    # (daily_export_wipe / admin "eksport"). _send_report va yordamchi
+    # funksiyalar kerak bo'lsa qayta yoqish uchun saqlab qolingan.
 
 
 def _score_to_level(score: int) -> str:

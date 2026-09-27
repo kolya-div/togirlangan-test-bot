@@ -1,6 +1,6 @@
 # Turkish Speaking Test Bot
 
-Telegram orqali turk tili speaking imtihonini o'tkazuvchi bot. Foydalanuvchi ovozli javoblarini yozadi, AI ularni matnga aylantirib, har bir javobni baholaydi va natijani (xatolar, ball, daraja) Telegram orqali yuboradi.
+Telegram orqali turk tili speaking imtihonini o'tkazuvchi bot. Foydalanuvchi ovozli javoblarini yozadi, AI ularni matnga aylantirib, har bir javobni baholaydi. Natijalar (xatolar, ball, daraja) foydalanuvchiga ko'rsatilmaydi — ular faqat admin oladigan Word (.docx) hisobotda.
 
 Test imtihon interfeysi — **React/Vite WebApp** (Telegram WebApp orqali ochiladi): savollar, tayyorlanish va javob vaqtlari, ovoz yozish tugmasi.
 
@@ -13,8 +13,8 @@ Test imtihon interfeysi — **React/Vite WebApp** (Telegram WebApp orqali ochila
 - 📊 **75 ballik shkala** va daraja: Below B1, B1, B2, C1
 - 🧩 **Test sozlamalari**: kunlik/haftalik rejim, VIP limit, kunlik limitni avtomatik qaytarish
 - 🚫 **Qayta kirishni bloklash**: test yakunlangan yoki boshlangan bo'lsa, qayta boshlab bo'lmaydi
-- ✅ **Avtomatik xabar**: test tugagach "Javoblar 10 daqiqa ichida chiqadi" xabari
-- 📬 **Hisobot**: har bir savol uchun audio yozuv, transcript, xatolar va umumiy ball/daraja
+- ✅ **Avtomatik xabar**: test tugagach "Javoblaringiz qabul qilindi" xabari
+- 📬 **Hisobot (faqat admin)**: Word hisobotda har bir savol bo'yicha transcript, xatolar va umumiy ball/daraja
 - 🔒 **Admin panel**: natijalar ro'yxati (sahifalash), foydalanuvchi qidiruv, blokdan chiqarish, eski ma'lumotlarni tozalash
 - 🧹 **Avtomatik tozalash**: muallak qolgan testlar (30 daqiqa), eski yozuvlar (30 kun), yetim audio fayllar
 - 📄 **Savollarni .docx dan yuklash**
