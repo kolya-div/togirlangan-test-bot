@@ -5,7 +5,7 @@ from pathlib import Path
 from app.config import settings
 from app.database.database import async_session
 from app.services.base_wipe import wipe_user_data
-from app.services.user_report_exporter import export_users_report
+from app.services.user_report_exporter import export_users_reports
 
 logger = logging.getLogger(__name__)
 
@@ -24,22 +24,40 @@ def is_in_progress() -> bool:
     return _in_progress
 
 
-async def _send_report_to_admins(report_path: Path) -> int:
-    """Hisobot faylini barcha adminlarga yuboradi — TelegramSender bilan."""
+async def _send_report_to_admins(report_paths: list[Path]) -> int:
+    """Hisobot fayllarini (Word + Excel) barcha adminlarga yuboradi.
+
+    Qaytaradi: Word hisobotni (birinchi fayl) HAQIQATAN olgan adminlar soni.
+    send_document xatoda exception emas, False qaytaradi — shuning uchun
+    natija tekshiriladi (oldin yuborilmasa ham "yuborildi" deb sanalardi
+    va wipe bajarilib ketishi mumkin edi).
+    """
     from app.services.telegram_sender import telegram_sender
 
+    captions = {
+        ".docx": "📊 Test natijalari (Word)",
+        ".xlsx": "📈 Test natijalari (Excel)",
+    }
     sent = 0
     for admin_id in settings.admin_id_list:
-        try:
-            await telegram_sender.send_document(
-                chat_id=admin_id,
-                document_path=report_path,
-                caption="📊 Foydalanuvchilar va test natijalari",
-            )
+        got_main = False
+        for i, path in enumerate(report_paths):
+            try:
+                ok = await telegram_sender.send_document(
+                    chat_id=admin_id,
+                    document_path=path,
+                    caption=captions.get(path.suffix, "📊 Test natijalari"),
+                )
+            except Exception as exc:  # noqa: BLE001
+                ok = False
+                logger.warning("Hisobot %s admin %s ga yuborilmadi: %s", path.name, admin_id, exc)
+            if ok and i == 0:
+                got_main = True
+        if got_main:
             sent += 1
             logger.info("Hisobot admin %s ga yuborildi", admin_id)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Hisobot admin %s ga yuborilmadi: %s", admin_id, exc)
+        else:
+            logger.warning("Hisobot admin %s ga yetib bormadi", admin_id)
     return sent
 
 
@@ -75,17 +93,16 @@ async def run_daily_export_and_wipe() -> dict | None:
 
     async with _progress_lock:
         _in_progress = True
-        report_path: Path | None = None
         try:
             async with async_session() as session:
-                report_path = await export_users_report(session)
+                report_paths = await export_users_reports(session)
 
             # Xavfsizlik 1: admin ro'yxati bo'sh bo'lsa — wipe bajarilmaydi.
             if not settings.admin_id_list:
                 logger.error("admin_id_list bo'sh — wipe bajarilmaydi, fayl saqlanadi")
                 return None
 
-            sent = await _send_report_to_admins(report_path)
+            sent = await _send_report_to_admins(report_paths)
 
             # Xavfsizlik 2: hech bo'lmaganda bitta admin faylni olmagan bo'lsa —
             # wipe bajarilmaydi, fayl saqlanadi (baza ma'lumoti yagona manba bo'lib qoladi).
@@ -107,12 +124,12 @@ async def run_daily_export_and_wipe() -> dict | None:
                 )
                 raise
 
-            # Wipe muvaffaqiyatli — yuborilgan faylni o'chiramiz (endi eskirgan).
-            try:
-                report_path.unlink(missing_ok=True)
-                logger.info("Eski hisobot fayli o'chirildi: %s", report_path)
-            except OSError:
-                logger.warning("Hisobot fayli o'chirilmadi: %s", report_path)
+            # Wipe muvaffaqiyatli — yuborilgan fayllarni o'chiramiz (eskirgan).
+            for path in report_paths:
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    logger.warning("Hisobot fayli o'chirilmadi: %s", path)
 
             await _notify_admins_text(
                 "✅ Kunlik hisobot yuborildi va baza tozalandi "
@@ -127,10 +144,10 @@ async def run_daily_export_and_wipe() -> dict | None:
             _in_progress = False
 
 
-async def run_admin_export_only() -> Path:
-    """Admin qo'lda eksporti (wipe'siz). Faqat hisobot faylini yaratadi va
-    yo'lini qaytaradi; yuborish va faylni o'chirishni chaqiruvchi (handler)
-    bajaradi. Race bo'lsa ExportBusyError ko'tariladi."""
+async def run_admin_export_only() -> list[Path]:
+    """Admin qo'lda eksporti (wipe'siz). Word va Excel hisobotlarni yaratib,
+    yo'llarini qaytaradi; yuborish va fayllarni o'chirishni chaqiruvchi
+    (handler) bajaradi. Race bo'lsa ExportBusyError ko'tariladi."""
     global _in_progress
     if _in_progress:
         raise ExportBusyError("Hozir boshqa eksport jarayoni davom etmoqda")
@@ -141,6 +158,6 @@ async def run_admin_export_only() -> Path:
         _in_progress = True
         try:
             async with async_session() as session:
-                return await export_users_report(session)
+                return await export_users_reports(session)
         finally:
             _in_progress = False

@@ -176,7 +176,7 @@ def results_menu() -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
-                    text="📍 Hammasi natijalari (docx)",
+                    text="📍 Hammasi natijalari (Word + Excel)",
                     callback_data="export_all_results",
                 ),
             ],

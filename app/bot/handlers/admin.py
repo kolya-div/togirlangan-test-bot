@@ -777,7 +777,7 @@ async def export_all_results_handler(callback: CallbackQuery) -> None:
 
     await callback.answer("Eksport tayyorlanmoqda...")
     try:
-        report_path = await run_admin_export_only()
+        report_paths = await run_admin_export_only()
     except ExportBusyError:
         await callback.message.answer("Hozir boshqa eksport jarayoni davom etmoqda.")
         return
@@ -786,19 +786,21 @@ async def export_all_results_handler(callback: CallbackQuery) -> None:
         await callback.message.answer("❌ Eksportda xatolik yuz berdi.")
         return
 
-    try:
-        await callback.message.answer_document(
-            FSInputFile(report_path),
-            caption="📊 Foydalanuvchilar va test natijalari",
-        )
-    except Exception:
-        logger.exception("Hisobot yuborilmadi")
-        await callback.message.answer("❌ Hisobot yuborishda xatolik.")
-    finally:
+    captions = {".docx": "📊 Test natijalari (Word)", ".xlsx": "📈 Test natijalari (Excel)"}
+    for report_path in report_paths:
         try:
-            report_path.unlink(missing_ok=True)
-        except OSError:
-            logger.warning("Hisobot fayli o'chirilmadi: %s", report_path)
+            await callback.message.answer_document(
+                FSInputFile(report_path),
+                caption=captions.get(report_path.suffix, "📊 Test natijalari"),
+            )
+        except Exception:
+            logger.exception("Hisobot yuborilmadi: %s", report_path.name)
+            await callback.message.answer(f"❌ {report_path.name} ni yuborishda xatolik.")
+        finally:
+            try:
+                report_path.unlink(missing_ok=True)
+            except OSError:
+                logger.warning("Hisobot fayli o'chirilmadi: %s", report_path)
 
 
 @router.callback_query(F.data == "search_user")
