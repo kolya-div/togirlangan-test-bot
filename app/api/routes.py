@@ -229,8 +229,17 @@ async def create_attempt(
         if not db_user:
             db_user = User(telegram_id=user_id, is_registered=False)
             session.add(db_user)
-            await session.commit()
-            await session.refresh(db_user)
+            try:
+                await session.commit()
+                await session.refresh(db_user)
+            except IntegrityError:
+                # Parallel so'rov userni allaqachon yaratgan — qayta o'qiymiz
+                await session.rollback()
+                db_user = (
+                    await session.execute(
+                        select(User).where(User.telegram_id == user_id)
+                    )
+                ).scalar_one()
 
         # SECURITY: Ro'yxatdan o'tmagan foydalanuvchilar testga kirishlari
         # taqiqlanadi. Bot flow'ida har bir foydalanuvchi taklif havolasi

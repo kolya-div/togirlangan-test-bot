@@ -1,6 +1,7 @@
 import json
 
 from sqlalchemy import Date, delete, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.models import Answer, Question, TestAttempt, User, TestSettings
@@ -30,7 +31,18 @@ async def get_or_create_user(
             is_admin=telegram_id in admin_ids,
         )
         session.add(user)
-        await session.commit()
+        try:
+            await session.commit()
+        except IntegrityError:
+            # Poyga: bir xil foydalanuvchining bir nechta /start'i bir
+            # vaqtda qayta ishlanganda (masalan bot qayta ishga tushgach
+            # to'planib qolgan xabarlar) boshqa so'rov userni allaqachon
+            # yaratgan — uni qayta o'qiymiz.
+            await session.rollback()
+            result = await session.execute(
+                select(User).where(User.telegram_id == telegram_id),
+            )
+            return result.scalar_one()
         await session.refresh(user)
 
     return user
