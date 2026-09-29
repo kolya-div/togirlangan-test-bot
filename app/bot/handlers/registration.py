@@ -1,7 +1,7 @@
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import Message
+from aiogram.types import Message, ReplyKeyboardRemove
 
 from app.bot.keyboards import phone_keyboard
 from app.bot.states import RegistrationStates
@@ -113,5 +113,7 @@ async def process_phone(
 
     await message.answer(
         "✅ Ro'yxatdan o'tdingiz.\nAdmin testni faollashtirishini kuting.",
-        reply_markup=None,
+        # Telefon tugmasi (reply klaviatura) yopiladi — reply_markup=None
+        # uni olib tashlamaydi, ekranda osilib qolardi.
+        reply_markup=ReplyKeyboardRemove(),
     )

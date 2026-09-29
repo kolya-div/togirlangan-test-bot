@@ -1,12 +1,14 @@
-"""AI barcha javoblarni tekshirib bo'lgach — natijalarni (Word + Excel)
-adminlarga avtomatik yuborish.
+"""AI barcha javoblarni tekshirib bo'lgach — adminlardan so'rash:
+"Javoblar tayyor. Yana testdan o'tadiganlar bormi?"  [✅ Ha] [❌ Yo'q]
+
+- Yo'q → natijalar (Word + Excel) adminlarga yuboriladi.
+- Ha   → admin panel tugmalari; keyingi testlar tekshirilgach yana so'raladi.
 
 Har bir attempt baholangach `notify_attempt_evaluated()` chaqiriladi.
-Hisobot darhol emas, AUTO_REPORT_DELAY_SECONDS jimlikdan keyin yuboriladi
-(debounce): odamlar testni turli vaqtda tugatadi — har biri uchun alohida
-fayl yubormaslik uchun, yangi baholash kelsa kutish qaytadan boshlanadi.
-Yuborishdan oldin navbat bo'shligi va bazada "processing" qolmagani
-tekshiriladi; aks holda yana kutiladi.
+Savol darhol emas, AUTO_REPORT_DELAY_SECONDS jimlikdan keyin yuboriladi
+(debounce): odamlar testni turli vaqtda tugatadi — yangi baholash kelsa
+kutish qaytadan boshlanadi. Oldin navbat bo'shligi va bazada "processing"
+qolmagani tekshiriladi; aks holda yana kutiladi.
 """
 
 import asyncio
@@ -20,6 +22,8 @@ logger = logging.getLogger(__name__)
 
 _timer: asyncio.Task | None = None
 _evaluated_since_report = 0
+# Adminlarga savol yuborilgan va hali javob berilmagan — qayta so'ramaymiz
+_prompt_pending = False
 
 
 def _delay() -> float:
@@ -52,7 +56,7 @@ async def _wait_and_send() -> None:
         if not await _all_evaluated():
             _restart_timer()  # hali tekshirilayotganlar bor — yana kutamiz
             return
-        await send_auto_report()
+        await ask_admins()
     except Exception:
         logger.exception("Avtomatik hisobot yuborilmadi")
 
@@ -82,9 +86,55 @@ async def _all_evaluated() -> bool:
     return (await _counts())["processing"] == 0
 
 
-async def send_auto_report() -> bool:
-    """Word + Excel hisobotni adminlarga yuboradi. Yuborilsa True."""
-    global _evaluated_since_report
+async def ask_admins() -> int:
+    """"Javoblar tayyor. Yana testdan o'tadiganlar bormi?" [Ha] [Yo'q].
+    Qaytaradi: savol yetkazilgan adminlar soni."""
+    global _prompt_pending
+    from app.bot.bot import bot
+    from app.bot.keyboards import auto_report_keyboard
+
+    if _evaluated_since_report == 0 or _prompt_pending:
+        return 0  # yangi natija yo'q yoki savol allaqachon kutilmoqda
+
+    counts = await _counts()
+    text = (
+        "✅ <b>Barcha javoblar tayyor!</b>\n\n"
+        f"AI tekshirgan testlar: <b>{counts['finished']}</b>\n"
+    )
+    if counts["active"]:
+        text += f"⏳ Hali tugatmaganlar: <b>{counts['active']}</b>\n"
+    text += (
+        "\n❓ Yana testdan o'tadiganlar bormi?\n\n"
+        "«Yo'q» — natijalar (Word va Excel) hozir yuboriladi.\n"
+        "«Ha» — hamma tugatgach yana so'rayman."
+    )
+    delivered = 0
+    for admin_id in settings.admin_id_list:
+        try:
+            await bot.send_message(
+                admin_id, text, parse_mode="HTML", reply_markup=auto_report_keyboard(),
+            )
+            delivered += 1
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Admin %s ga savol yuborilmadi: %s", admin_id, exc)
+    if delivered:
+        _prompt_pending = True
+    return delivered
+
+
+def answer_yes() -> None:
+    """Admin «Ha» bosdi — hozir yubormaymiz; keyingi testlar tekshirilgach
+    yana so'raymiz (yangi baholash taymerni qayta boshlaydi)."""
+    global _prompt_pending
+    _prompt_pending = False
+
+
+async def send_auto_report(force: bool = False) -> bool:
+    """Word + Excel hisobotni adminlarga yuboradi. Yuborilsa True.
+
+    force=True — admin «Yo'q» bosganda: yangi natija bo'lmasa ham yuboriladi.
+    """
+    global _evaluated_since_report, _prompt_pending
     from app.services.daily_export_wipe import (
         ExportBusyError,
         _notify_admins_text,
@@ -92,24 +142,25 @@ async def send_auto_report() -> bool:
         run_admin_export_only,
     )
 
-    if _evaluated_since_report == 0:
+    if _evaluated_since_report == 0 and not force:
         return False  # oxirgi hisobotdan beri yangi natija yo'q
 
     try:
         paths = await run_admin_export_only()
     except ExportBusyError:
-        _restart_timer()  # boshqa eksport ketmoqda — keyinroq
+        if not force:
+            _restart_timer()  # boshqa eksport ketmoqda — keyinroq
         return False
 
     try:
         counts = await _counts()
         text = (
-            "🤖 <b>AI javoblarni tekshirib bo'ldi</b>\n\n"
+            "📊 <b>Test natijalari</b>\n\n"
             f"✅ Tekshirilgan testlar: <b>{counts['finished']}</b>\n"
         )
         if counts["active"]:
             text += f"⏳ Hali tugatmaganlar: <b>{counts['active']}</b>\n"
-        text += "\nNatijalar (Word va Excel) quyida 👇"
+        text += "\nWord va Excel fayllar quyida 👇"
         await _notify_admins_text(text)
         sent = await _send_report_to_admins(paths)
     finally:
@@ -121,15 +172,17 @@ async def send_auto_report() -> bool:
 
     if sent:
         _evaluated_since_report = 0
-        logger.info("Avtomatik hisobot %s ta adminga yuborildi", sent)
+        _prompt_pending = False
+        logger.info("Natijalar hisoboti %s ta adminga yuborildi", sent)
     return bool(sent)
 
 
 def mark_reported() -> None:
     """Natijalar boshqa yo'l bilan (kunlik 00:00 hisobot) yuborildi —
     kutilayotgan avtomatik hisobot kerak emas."""
-    global _timer, _evaluated_since_report
+    global _timer, _evaluated_since_report, _prompt_pending
     _evaluated_since_report = 0
+    _prompt_pending = False
     if _timer is not None and not _timer.done():
         _timer.cancel()
     _timer = None

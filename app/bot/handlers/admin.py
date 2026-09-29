@@ -144,6 +144,57 @@ async def cancel_handler(message: Message, state: FSMContext) -> None:
         await message.answer("Amal bekor qilindi.")
 
 
+# ==================== AVTOMATIK HISOBOT: HA / YO'Q ====================
+
+@router.callback_query(F.data == "autorep_no")
+async def auto_report_no(callback: CallbackQuery) -> None:
+    """«Yana testdan o'tadiganlar bormi?» → Yo'q: natijalarni yuborish."""
+    if callback.from_user.id not in settings.admin_id_list:
+        await callback.answer("Ruxsat yo'q", show_alert=True)
+        return
+
+    from app.services import auto_report
+
+    await callback.answer("Natijalar tayyorlanmoqda...")
+    await _safe_edit(
+        callback.message,
+        text="📤 Natijalar (Word va Excel) tayyorlanmoqda va yuborilmoqda...",
+    )
+    try:
+        sent = await auto_report.send_auto_report(force=True)
+    except Exception:
+        logger.exception("Natijalarni yuborishda xato")
+        sent = False
+    if not sent:
+        await callback.message.answer(
+            "❌ Natijalarni yuborib bo'lmadi. Keyinroq «👥 Foydalanuvchilar va "
+            "natijalar» → «📍 Hammasi natijalari» orqali qayta urinib ko'ring.",
+            reply_markup=admin_menu(),
+        )
+
+
+@router.callback_query(F.data == "autorep_yes")
+async def auto_report_yes(callback: CallbackQuery, state: FSMContext) -> None:
+    """«Yana testdan o'tadiganlar bormi?» → Ha: admin panel tugmalari."""
+    if callback.from_user.id not in settings.admin_id_list:
+        await callback.answer("Ruxsat yo'q", show_alert=True)
+        return
+
+    from app.services import auto_report
+
+    auto_report.answer_yes()
+    await state.clear()
+    await callback.answer()
+    await _safe_edit(
+        callback.message,
+        text="👍 Yaxshi. Qolganlar testni tugatib, AI tekshirib bo'lgach yana so'rayman.",
+    )
+    await callback.message.answer(
+        "👋 Admin panelga xush kelibsiz.",
+        reply_markup=admin_menu(),
+    )
+
+
 # ==================== ASOSIY ADMIN CALLBACK ====================
 
 @router.callback_query(F.data == "test_access")
