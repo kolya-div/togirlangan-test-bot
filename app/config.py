@@ -44,6 +44,11 @@ class Settings(BaseSettings):
     # Kunlik hisobot/tozalash vaqti shu vaqt mintaqasida 00:00 da bajariladi
     report_timezone: str = "Asia/Tashkent"
 
+    # AI hamma javoblarni tekshirib bo'lgach Word + Excel hisobot adminlarga
+    # avtomatik yuboriladi — oxirgi baholashdan shuncha soniya jimlikdan keyin
+    auto_report_enabled: bool = True
+    auto_report_delay_seconds: int = 180
+
     # Logging sozlamalari
     log_level: str = "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
 

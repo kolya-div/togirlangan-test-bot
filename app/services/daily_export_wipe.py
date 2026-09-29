@@ -113,6 +113,11 @@ async def run_daily_export_and_wipe() -> dict | None:
                 )
                 return None
 
+            # Kunlik hisobot hamma natijani o'z ichiga oladi — kutilayotgan
+            # avtomatik hisobot (auto_report) endi kerak emas.
+            from app.services import auto_report
+            auto_report.mark_reported()
+
             # Kamida bitta admin faylni oldi — endi tozalash mumkin.
             try:
                 async with async_session() as wipe_session:
