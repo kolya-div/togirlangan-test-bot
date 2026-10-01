@@ -174,6 +174,10 @@ async def _report_worker(idx: int) -> None:
             await job_tracker.complete(attempt_id)
             logger.info("Ishchi #%s: attempt #%s tugadi", idx, attempt_id)
 
+            # Hammasi baholangach adminlarga avtomatik hisobot (debounce bilan)
+            from app.services.auto_report import notify_attempt_evaluated
+            notify_attempt_evaluated()
+
         except Exception as e:
             # Job status: → failed
             await job_tracker.fail(attempt_id, str(e))
@@ -229,6 +233,9 @@ async def stop_report_workers() -> None:
     global _started, _stopping
     _stopping = True
     _started = False
+
+    from app.services import auto_report
+    await auto_report.stop()
 
     queue = _report_queue
     if queue is not None:

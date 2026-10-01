@@ -183,19 +183,3 @@ export async function notifyTestClosed(attemptId, initData) {
 
     return res.json()
 }
-
-export async function fetchResults(attemptId, initData) {
-    const params = new URLSearchParams()
-    if (initData) params.set('init_data', initData)
-    const qs = params.toString()
-    const res = await fetchWithTimeout(
-        `${API_BASE}/api/attempts/${attemptId}/results${qs ? '?' + qs : ''}`,
-        {
-            cache: 'no-store',
-            headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate' },
-        },
-        30000
-    )
-    if (!res.ok) throw new Error('Natijalarni yuklab bo\'lmadi')
-    return res.json()
-}

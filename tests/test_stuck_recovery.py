@@ -146,3 +146,28 @@ async def test_load_test_state_from_db_restores_cache():
     finally:
         test_state.set_test_active_cache(False)
         test_state._invite_token_cache = None
+
+
+@pytest.mark.anyio
+async def test_orphan_cleanup_keeps_question_images(tmp_path):
+    """Savol rasmlari (data/audios/images) 'yetim audio' deb o'chirilmasin."""
+    import time as _time
+
+    images = tmp_path / "images"
+    images.mkdir()
+    img = images / "rId4.png"
+    img.write_bytes(b"png")
+    orphan = tmp_path / "7" / "old.webm"
+    orphan.parent.mkdir()
+    orphan.write_bytes(b"audio")
+    old = _time.time() - 3600  # 1 soat oldin — ORPHAN_MIN_AGE dan eski
+    os.utime(img, (old, old))
+    os.utime(orphan, (old, old))
+
+    with patch.object(cleanup_service.settings, "upload_dir", str(tmp_path)):
+        async with TestSessionLocal() as session:
+            deleted = await cleanup_service.delete_orphan_audios(session)
+
+    assert img.exists(), "savol rasmi o'chirilmasligi kerak"
+    assert not orphan.exists(), "haqiqiy yetim audio o'chirilishi kerak"
+    assert deleted == 1

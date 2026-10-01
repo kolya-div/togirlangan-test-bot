@@ -101,19 +101,19 @@ async def test_report_contains_user_answers(tmp_path):
     # Umumiy jadval
     assert "Ali Valiyev" in text
     assert "Test Topshirmagan" in text
-    assert "2026-09-26 00:00" in text  # boshlangan vaqti Toshkent vaqtida
+    assert "2026-09-26 00:10" in text  # yakunlangan vaqti Toshkent vaqtida
+    assert "52/75" in text and "B2" in text
 
     # Javoblar bo'limi
-    assert "Foydalanuvchilar javoblari" in text
     assert "Kendinizi tanıtın." in text
     assert "Benim adım Ali. Ben öğrenciyim" in text
     assert "Nuqta tushib qolgan" in text
-    assert "Ball: 8/10" in text  # 80% × 10 ball
-    assert "Ball: 60%" in text   # max_points yo'q savol
+    assert "8/10 ball" in text  # 80% × 10 ball
+    assert "60% ball" in text   # max_points yo'q savol
     # Savol tartibi: 1.1 oldin, 1.2 keyin
     assert text.index("Kendinizi tanıtın.") < text.index("Hobileriniz neler?")
     # Test topshirmagan userning javoblar bo'limi yo'q
-    assert "Test Topshirmagan (" not in text
+    assert "Test Topshirmagan —" not in text
 
 
 @pytest.mark.anyio
@@ -162,3 +162,51 @@ async def test_control_characters_do_not_break_report(tmp_path):
     text = _docx_text(path)
     assert "Ali Bad" in text
     assert "Merhaba dünya" in text
+
+
+
+@pytest.mark.anyio
+async def test_excel_report_has_scores_and_answers(tmp_path):
+    from openpyxl import load_workbook
+
+    from app.services.user_report_exporter import build_report_xlsx, collect_users_with_results
+
+    async with TestSessionLocal() as session:
+        user = User(telegram_id=8963201482, full_name="Zarina", username="zar", is_registered=True)
+        low = User(telegram_id=777005, full_name="Bekzod", is_registered=True)
+        q1 = Question(section="1.1", order_number=1, text="Soru 1?", max_points=10)
+        q2 = Question(section="1.2", order_number=1, text="Soru 2?")
+        session.add_all([user, low, q1, q2])
+        await session.flush()
+        a1 = TestAttempt(user_id=user.id, status="finished", score=60, level="B2")
+        a2 = TestAttempt(user_id=low.id, status="finished", score=30, level="Below B1")
+        session.add_all([a1, a2])
+        await session.flush()
+        session.add_all([
+            Answer(attempt_id=a1.id, question_id=q1.id, score=90, transcript="Merhaba",
+                   feedback=json.dumps({"mistakes": [{"original": "x", "correct": "y"}]})),
+            Answer(attempt_id=a1.id, question_id=q2.id, score=70, transcript="İyiyim"),
+        ])
+        await session.commit()
+
+    async with TestSessionLocal() as session:
+        rows = await collect_users_with_results(session)
+    path = tmp_path / "r.xlsx"
+    build_report_xlsx(rows, path)
+
+    wb = load_workbook(path)
+    ws = wb["Natijalar"]
+    header = [c.value for c in ws[1]]
+    assert header[:9] == ["#", "Ism familiya", "Telegram ID", "Telefon", "Username",
+                          "Holat", "Yakunlangan", "Ball (/75)", "Daraja"]
+    assert header[9:] == ["1.1\n(10 ball)", "1.2"]
+    # Eng yuqori ball birinchi
+    first = [c.value for c in ws[2]]
+    assert first[1] == "Zarina" and first[2] == 8963201482 and first[7] == 60
+    assert first[9:] == [9, 70]  # 90% × 10 ball = 9; ballsiz savol — foiz
+    assert [c.value for c in ws[3]][1] == "Bekzod"
+
+    wa = wb["Javoblar"]
+    rows_a = [[c.value for c in r] for r in wa.iter_rows(min_row=2)]
+    assert len(rows_a) == 2
+    assert rows_a[0][2] == "1.1" and rows_a[0][6] == "x → y" and rows_a[0][7] == "9/10"

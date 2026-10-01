@@ -2,8 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import QuestionCard from './components/QuestionCard.jsx'
 import Timer from './components/Timer.jsx'
 import AudioRecorder from './components/AudioRecorder.jsx'
-import Results from './components/Results.jsx'
-import { fetchQuestions, createAttempt, uploadAnswer, finishAttempt, fetchResults, initWebApp } from './api.js'
+import { fetchQuestions, createAttempt, uploadAnswer, finishAttempt, initWebApp } from './api.js'
 
 function formatTime(sec) {
     const m = Math.floor(sec / 60).toString().padStart(2, '0')
@@ -22,10 +21,9 @@ export default function App() {
     const [attemptId, setAttemptId] = useState(null)
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState(null)
+    // Natijalar foydalanuvchiga ko'rsatilmaydi (faqat admin .docx da) —
+    // test tugagach faqat "javoblaringiz qabul qilindi" ekrani chiqadi.
     const [finished, setFinished] = useState(false)
-    const [result, setResult] = useState(null)
-    const [resultsData, setResultsData] = useState(null)
-    const [resultsLoading, setResultsLoading] = useState(false)
     const [attemptStatus, setAttemptStatus] = useState(null)
     const [startingTest, setStartingTest] = useState(false)
     const [entryDialog, setEntryDialog] = useState(null)
@@ -61,31 +59,9 @@ export default function App() {
                 setInitUser(init.user_id)
 
                 const status = init.status
-                if (status === 'finished') {
+                if (status === 'finished' || status === 'processing') {
                     setInitChecked(true)
-                    setAttemptStatus('finished')
                     setFinished(true)
-                    setResultsLoading(true)
-                    if (init.attempt_id) {
-                        setAttemptId(init.attempt_id)
-                        fetchResults(init.attempt_id, initData)
-                            .then(data => setResultsData(data))
-                            .catch(() => { })
-                            .finally(() => setResultsLoading(false))
-                    } else {
-                        setResultsLoading(false)
-                    }
-                    setLoading(false)
-                    return
-                }
-                if (status === 'processing') {
-                    setInitChecked(true)
-                    setAttemptStatus('processing')
-                    setResultsLoading(true)
-                    if (init.attempt_id) {
-                        setAttemptId(init.attempt_id)
-                        pollResults(init.attempt_id)
-                    }
                     setLoading(false)
                     return
                 }
@@ -143,47 +119,6 @@ export default function App() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [])
 
-    const [resultsPolling, setResultsPolling] = useState(false)
-    const pollRef = useRef(null)
-
-    const pollResults = useCallback(async (aid) => {
-        if (pollRef.current) return
-        setResultsPolling(true)
-        let pollInterval = 2000  // Start with 2s
-        const MAX_POLL_INTERVAL = 15000  // Cap at 15s
-
-        const poll = async () => {
-            try {
-                const data = await fetchResults(aid, initData)
-                if (data && data.status === 'finished') {
-                    setResultsData(data)
-                    setResultsLoading(false)
-                    setResultsPolling(false)
-                    setFinished(true)
-                    setAttemptStatus('finished')
-                    clearInterval(pollRef.current)
-                    pollRef.current = null
-                    return
-                }
-                // Progressive backoff: 2s → 3s → 5s → 8s → 12s → 15s
-                pollInterval = Math.min(pollInterval * 1.5, MAX_POLL_INTERVAL)
-                clearInterval(pollRef.current)
-                pollRef.current = setInterval(poll, pollInterval)
-            } catch (_) { }
-        }
-        await poll()
-        pollRef.current = setInterval(poll, pollInterval)
-    }, [initData])
-
-    useEffect(() => {
-        return () => {
-            if (pollRef.current) {
-                clearInterval(pollRef.current)
-                pollRef.current = null
-            }
-        }
-    }, [])
-
     const startTest = async () => {
         if (startingTest) return
         setStartingTest(true)
@@ -198,21 +133,8 @@ export default function App() {
             if (!mountedRef.current) return
             setAttemptId(attempt.id)
 
-            if (attempt.status === 'finished') {
-                setAttemptStatus('finished')
+            if (attempt.status === 'finished' || attempt.status === 'processing') {
                 setFinished(true)
-                setResultsLoading(true)
-                fetchResults(attempt.id, initData)
-                    .then(data => setResultsData(data))
-                    .catch(() => { })
-                    .finally(() => setResultsLoading(false))
-                return
-            }
-
-            if (attempt.status === 'processing') {
-                setAttemptStatus('processing')
-                setResultsLoading(true)
-                pollResults(attempt.id)
                 return
             }
 
@@ -243,11 +165,9 @@ export default function App() {
                     // Test boshlangan (0 javob bo'lsa ham) — qayta boshlab bo'lmaydi
                     setError('Siz allaqachon bu testni boshlagansiz. Qayta kirish mumkin emas.')
                 } else {
-                    setAttemptStatus('finished')
                     setFinished(true)
                 }
             } else if (e.message.includes('403') || e.message.includes('allaqachon')) {
-                setAttemptStatus('finished')
                 setFinished(true)
             } else {
                 setError(e.message)
@@ -301,29 +221,14 @@ export default function App() {
         setPhase('uploading')
 
         try {
-            const res = await finishAttempt(aid, initData)
+            await finishAttempt(aid, initData)
             if (!mountedRef.current) return
-            setResult(res)
-
-            if (res.processing) {
-                setAttemptStatus('processing')
-                setResultsLoading(true)
-                pollResults(aid)
-            } else {
-                setFinished(true)
-                setAttemptStatus('finished')
-                setResultsLoading(true)
-                fetchResults(aid, initData)
-                    .then(data => setResultsData(data))
-                    .catch(() => { })
-                    .finally(() => setResultsLoading(false))
-            }
+            setFinished(true)
         } catch (e) {
             if (!mountedRef.current) return
 
             // 409 — allaqachon tugallangan
             if (e.message.includes('409')) {
-                setAttemptStatus('finished')
                 setFinished(true)
                 return
             }
@@ -336,7 +241,7 @@ export default function App() {
                 setError('Testni yakunlab bo\'lmadi. Iltimos, botga /start yozing.')
             }
         }
-    }, [attemptId, pollResults, initData])
+    }, [attemptId, initData])
 
     const handleRecordingStop = useCallback(() => {
         moveToNextQuestion()
@@ -366,29 +271,22 @@ export default function App() {
         )
     }
 
-    if (finished || attemptStatus === 'finished') {
-        return (
-            <div className="app-wrapper">
-                <Results result={result} resultsData={resultsData} loading={resultsLoading} attemptId={attemptId} initData={initData} onClose={() => tg?.close()} />
-            </div>
-        )
-    }
-
-    if (attemptStatus === 'processing' && !finished) {
+    if (finished) {
         return (
             <div className="app-wrapper">
                 <div className="card" style={{ textAlign: 'center', padding: '32px 20px' }}>
-                    <div style={{ fontSize: 40, marginBottom: 12 }}>⏳</div>
-                    <div style={{ fontWeight: 700, fontSize: 16 }}>Iltimos kutib turing</div>
+                    <div style={{ fontSize: 40, marginBottom: 12 }}>✅</div>
+                    <div style={{ fontWeight: 700, fontSize: 16 }}>Test yakunlandi!</div>
                     <div style={{ color: 'var(--text-secondary)', marginTop: 8 }}>
-                        Javoblar 10 daqiqa ichida chiqadi. Telegram orqali ovozlar va xatoliklar yuboriladi.
+                        Javoblaringiz qabul qilindi. Rahmat!
                     </div>
-                    {resultsPolling && (
-                        <div style={{ marginTop: 12 }}>
-                            <div className="loader" style={{ margin: '0 auto 8px', width: 24, height: 24 }}></div>
-                            <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Qayta ishlanmoqda...</div>
-                        </div>
-                    )}
+                    <button
+                        className="btn btn-outline"
+                        style={{ marginTop: 16, width: '100%' }}
+                        onClick={() => tg?.close()}
+                    >
+                        Yopish
+                    </button>
                 </div>
             </div>
         )
@@ -462,7 +360,7 @@ export default function App() {
                             <>
                                 <div className="loader"></div>
                                 <div style={{ fontWeight: 700, fontSize: 16, marginTop: 12 }}>
-                                    Natijalar qayta ishlanmoqda...
+                                    Javoblar yuborilmoqda...
                                 </div>
                             </>
                         ) : (
@@ -472,7 +370,7 @@ export default function App() {
                                     Siz barcha savollarga javob berdingiz.
                                 </div>
                                 <div style={{ color: 'var(--text-secondary)', marginTop: 8 }}>
-                                    Natijani olish uchun testni yakunlang.
+                                    Javoblaringizni yuborish uchun testni yakunlang.
                                 </div>
                                 <button
                                     className="btn btn-primary"
@@ -528,8 +426,8 @@ export default function App() {
                         <div className="bullet-item">
                             <span className="bullet-dot">•</span>
                             <div>
-                                <span className="bullet-label">Natijalar — </span>
-                                <span className="bullet-desc">Ball va tahlil natijalari</span>
+                                <span className="bullet-label">Yakunlash — </span>
+                                <span className="bullet-desc">Javoblaringiz tekshirish uchun yuboriladi</span>
                             </div>
                         </div>
                     </div>

@@ -18,13 +18,13 @@ def admin_menu() -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
-                    text="� Test kirish",
+                    text="🚪 Test kirish",
                     callback_data="test_access",
                 ),
             ],
             [
                 InlineKeyboardButton(
-                    text="�📝 Savollar boshqaruvi",
+                    text="📝 Savollar boshqaruvi",
                     callback_data="questions",
                 ),
             ],
@@ -176,7 +176,7 @@ def results_menu() -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
-                    text="📍 Hammasi natijalari (docx)",
+                    text="📍 Hammasi natijalari (Word + Excel)",
                     callback_data="export_all_results",
                 ),
             ],
@@ -309,6 +309,18 @@ def test_access_menu() -> InlineKeyboardMarkup:
                     text="🔙 Orqaga",
                     callback_data="back_to_admin",
                 ),
+            ],
+        ],
+    )
+
+
+def auto_report_keyboard() -> InlineKeyboardMarkup:
+    """AI hamma javoblarni tekshirgach: yana test topshiradiganlar bormi?"""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Ha", callback_data="autorep_yes"),
+                InlineKeyboardButton(text="❌ Yo'q", callback_data="autorep_no"),
             ],
         ],
     )

@@ -293,3 +293,24 @@ async def test_multiple_users_independent():
     assert resp1.status_code == 200
     assert resp2.status_code == 200
     assert resp1.json()["user_id"] != resp2.json()["user_id"]
+
+
+# ═══════════════════════════════════════════════
+# Test 11 — Yangi akkauntlar (ID > 2^31) testni boshlay oladi
+# ═══════════════════════════════════════════════
+@pytest.mark.anyio
+async def test_large_telegram_id_can_start_test():
+    big_id = 8963201482  # 2**31-1 dan katta — yangi Telegram akkauntlari
+    async with TestSessionLocal() as session:
+        await _create_user(session, big_id)
+        await _create_question(session)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        init = await client.post("/api/init", data={"init_data": make_init_data(big_id)})
+        attempt = await client.post("/api/attempts", data={"init_data": make_init_data(big_id)})
+
+    assert init.status_code == 200
+    assert init.json()["user_id"] == big_id
+    assert init.json()["registered"] is True
+    assert attempt.status_code == 200

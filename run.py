@@ -45,6 +45,9 @@ logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
+# Railway serverida ishlayaptimi (Railway bu o'zgaruvchilarni o'zi beradi)
+ON_RAILWAY = bool(os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("RAILWAY_PROJECT_ID"))
+
 # ──────────────────────────────────────────
 # NGROK TUNNEL (avtomatik ishga tushirish)
 # ──────────────────────────────────────────
@@ -59,7 +62,7 @@ def start_ngrok():
         
         token = os.getenv("NGROK_AUTHTOKEN")
         if not token:
-            logger.error("❌ NGROK_AUTHTOKEN .env da topilmadi!")
+            logger.info("ℹ️ NGROK_AUTHTOKEN yo'q — ngrok ishlatilmaydi.")
             return False
         
         logger.info("🔌 Ngrok ulanmoqda...")
@@ -69,7 +72,7 @@ def start_ngrok():
             for t in ngrok.get_tunnels():
                 addr = str(t.config.get("addr", ""))
                 proto = t.proto if hasattr(t, "proto") else "http"
-                if addr.endswith(":8000") and proto == "http":
+                if addr.endswith(f":{settings.port}") and proto == "http":
                     NGROK_PUBLIC_URL = t.public_url
                     if NGROK_PUBLIC_URL.startswith("http://"):
                         NGROK_PUBLIC_URL = NGROK_PUBLIC_URL.replace("http://", "https://")
@@ -86,7 +89,7 @@ def start_ngrok():
         last_error = None
         for attempt in range(3):
             try:
-                tunnel = ngrok.connect(8000, "http")
+                tunnel = ngrok.connect(settings.port, "http")
                 NGROK_PUBLIC_URL = tunnel.public_url
 
                 if NGROK_PUBLIC_URL.startswith("http://"):
@@ -132,7 +135,8 @@ async def _reset_daily_limit() -> None:
 
 async def _export_and_wipe() -> None:
     """.docx hisobotni adminlarga yuborib, bazani TO'LIQ tozalaydi
-    (users, attempts, answers, questions, test_settings, audio fayllar).
+    (users, attempts, answers, questions, test_settings). Audio fayllar va
+    savol rasmlari o'chirilmaydi — data/archive/ ga saqlanadi.
 
     Xavfsizlik: wipe faqat adminlarning kamida bittasi hisobot faylini
     olgan taqdirda bajariladi (daily_export_wipe ichida kafolatlangan).
@@ -299,10 +303,14 @@ def prepare_webapp() -> str | None:
 
     npm_path = _find_npm()
     if not npm_path:
-        logger.warning(
-            "⚠️ npm topilmadi — Node.js o'rnating (https://nodejs.org). "
-            "npm install / build avtomatik bajarilmadi."
-        )
+        if os.path.exists(os.path.join(WEBAPP_DIR, "dist", "index.html")):
+            # Server (Docker): WebApp image build paytida tayyorlangan
+            logger.info("✅ webapp/dist tayyor (npm kerak emas).")
+        else:
+            logger.warning(
+                "⚠️ npm topilmadi — Node.js o'rnating (https://nodejs.org). "
+                "npm install / build avtomatik bajarilmadi."
+            )
         return None
 
     logger.info(f"🔎 npm topildi: {npm_path}")
@@ -326,7 +334,7 @@ def start_vite(npm_path: str | None) -> None:
     if not npm_path:
         logger.warning(
             "⚠️ Vite dev-server ishga tushmaydi. webapp/dist mavjud bo'lsa "
-            "FastAPI http://localhost:8000 da xizmat qiladi."
+            f"FastAPI http://localhost:{settings.port} da xizmat qiladi."
         )
         return
 
@@ -381,30 +389,41 @@ async def main():
     # 5. Cache cleanup task
     asyncio.create_task(cleanup_task(interval=300))  # 5 minutes
 
-    # 6. Vite dev serverni ishga tushirish
-    logger.info("🌐 Frontend (Vite) ishga tushmoqda...")
-    start_vite(npm_path)
-
-    # 7. Ngrok tunnelni ishga tushirish
-    start_ngrok()
-
-    # 8. WebApp URL ni yangilash
-    if NGROK_PUBLIC_URL:
-        try:
-            settings.webapp_url = NGROK_PUBLIC_URL
-        except Exception:
-            pass
-        os.environ["WEBAPP_URL"] = NGROK_PUBLIC_URL
-        logger.info(f"🌐 WebApp URL avtomatik sozlandi: {NGROK_PUBLIC_URL}")
+    if ON_RAILWAY:
+        # Serverda: WebApp tayyor build (webapp/dist) dan beriladi, domen —
+        # Railway'niki yoki WEBAPP_URL; ngrok va Vite dev server kerak emas.
+        logger.info(f"🌐 WebApp URL: {settings.webapp_url}")
+        if not settings.webapp_url.startswith("https://"):
+            # Telegram WebApp faqat HTTPS bilan ochiladi
+            logger.error(
+                "❌ WebApp URL HTTPS emas — «Testni boshlash» tugmasi ishlamaydi. "
+                "Railway: Settings → Networking → Generate Domain (yoki WEBAPP_URL qo'ying)."
+            )
     else:
-        logger.warning("⚠️ Ngrok URL olinmadi, lekin bot ishlayveradi.")
+        # 6. Vite dev serverni ishga tushirish
+        logger.info("🌐 Frontend (Vite) ishga tushmoqda...")
+        start_vite(npm_path)
+
+        # 7. Ngrok tunnelni ishga tushirish
+        start_ngrok()
+
+        # 8. WebApp URL ni yangilash
+        if NGROK_PUBLIC_URL:
+            try:
+                settings.webapp_url = NGROK_PUBLIC_URL
+            except Exception:
+                pass
+            os.environ["WEBAPP_URL"] = NGROK_PUBLIC_URL
+            logger.info(f"🌐 WebApp URL avtomatik sozlandi: {NGROK_PUBLIC_URL}")
+        else:
+            logger.warning(f"⚠️ Ngrok URL olinmadi — WebApp URL: {settings.webapp_url}")
 
     # 9. Uvicorn serverni bitta loopda ishga tushirish (thread emas!)
     # Thread o'rniga background task — bitta event loop, bitta pool.
     config = uvicorn.Config(
         app,
         host="0.0.0.0",
-        port=8000,
+        port=settings.port,
         log_level="warning",
         access_log=False,
         workers=1,
@@ -422,7 +441,7 @@ async def main():
     while not server.started:
         await asyncio.sleep(0.1)
 
-    logger.info("✅ FastAPI tayyor: http://localhost:8000")
+    logger.info(f"✅ FastAPI tayyor: http://localhost:{settings.port}")
     logger.info("🤖 Bot ishga tushmoqda...")
 
     # 10. Bot handlerlarini ulash
@@ -463,7 +482,7 @@ if __name__ == "__main__":
     _admin_count = len([a for a in _admin_raw.split(",") if a.strip()]) if _admin_raw else 0
     print(f"   Admins    : {_admin_count} ta (qiymatlar loglanmaydi)")
     print(f"   AI Prov.  : {os.getenv('AI_PROVIDER', 'openai')}")
-    print(f"   Port      : 8000")
+    print(f"   Port      : {settings.port}")
     print(f"   Mode      : Single event loop (no threading)")
     print("=" * 56)
     print()

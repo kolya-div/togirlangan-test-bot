@@ -1,40 +1,40 @@
-# ==================== STAGE 1: Build ====================
+# ==================== STAGE 1: WebApp (React/Vite) ====================
+FROM node:20-slim AS webapp
+
+WORKDIR /webapp
+COPY webapp/package.json webapp/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY webapp/ ./
+RUN npm run build
+
+# ==================== STAGE 2: Python dependencies ====================
 FROM python:3.13-slim AS builder
 
 WORKDIR /app
 
-# Tizim paketlari
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
-    libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# Python dependencies
+# Python dependencies (hammasi tayyor wheel — gcc/libpq kerak emas)
 COPY requirements.txt .
 RUN pip install --no-cache-dir --user -r requirements.txt
 
-# ==================== STAGE 2: Runtime ====================
+# ==================== STAGE 3: Runtime ====================
 FROM python:3.13-slim
 
 WORKDIR /app
 
-# Tizim paketlari (runtime uchun)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpq5 \
-    ffmpeg \
-    && rm -rf /var/lib/apt/lists/*
-
 # Python packagelarni ko'chirish
 COPY --from=builder /root/.local /root/.local
-ENV PATH=/root/.local/bin:$PATH
+ENV PATH=/root/.local/bin:$PATH \
+    PYTHONUNBUFFERED=1
 
-# Loyiha fayllari
+# Loyiha fayllari + tayyor WebApp build
 COPY . .
+COPY --from=webapp /webapp/dist ./webapp/dist
 
-# Papkalarni yaratish
-RUN mkdir -p data/audios data/uploads data/exports
+# Ma'lumotlar papkasi (audio, savol rasmlari, arxiv, hisobotlar).
+# Railway'da bu yerga Volume ulanadi: Mount path = /app/data
+RUN mkdir -p data/audios data/uploads data/exports data/archive data/reports
 
-# Port
+# Port — Railway PORT o'zgaruvchisini o'zi beradi (run.py uni o'qiydi)
 EXPOSE 8000
 
 # Ishga tushirish

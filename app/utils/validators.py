@@ -145,7 +145,10 @@ def validate_telegram_id(telegram_id: Any) -> int:
     if telegram_id <= 0:
         raise ValueError("Telegram ID must be positive")
     
-    if telegram_id > 2**31 - 1:  # Max Telegram ID
+    # Telegram user ID'lari 52 bitgacha bo'ladi (Bot API hujjati). Oldingi
+    # 2**31-1 chegarasi yangi akkauntlarni (ID 8 000 000 000+) rad etardi —
+    # ular /api/init da 400 olib, testni umuman boshlay olmasdi.
+    if telegram_id > 2**52:
         raise ValueError("Telegram ID exceeds maximum value")
     
     return telegram_id

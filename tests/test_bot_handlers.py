@@ -76,6 +76,9 @@ async def test_typed_full_name_is_saved_on_registration():
 
     async with TestSessionLocal() as s:
         user = (await s.execute(select(User).where(User.telegram_id == 111))).scalar_one()
+    # Telefon tugmasi (reply klaviatura) yopiladi
+    from aiogram.types import ReplyKeyboardRemove
+    assert isinstance(msg.answer.await_args.kwargs["reply_markup"], ReplyKeyboardRemove)
     assert user.full_name == "Ali Valiyev"
     assert user.phone == "+998901112233"
     assert user.is_registered is True

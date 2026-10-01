@@ -55,6 +55,11 @@ from app.database.repositories import (
     search_users,
     get_user_attempts,
 )
+from app.services.audio_archive import (
+    archive_attempt_audios,
+    archive_question_images,
+    new_archive_dir,
+)
 from app.services.cleanup_service import run_cleanup, delete_user_attempts
 from app.services.daily_export_wipe import (
     ExportBusyError,
@@ -137,6 +142,57 @@ async def cancel_handler(message: Message, state: FSMContext) -> None:
         await message.answer("Amal bekor qilindi.", reply_markup=admin_menu())
     else:
         await message.answer("Amal bekor qilindi.")
+
+
+# ==================== AVTOMATIK HISOBOT: HA / YO'Q ====================
+
+@router.callback_query(F.data == "autorep_no")
+async def auto_report_no(callback: CallbackQuery) -> None:
+    """«Yana testdan o'tadiganlar bormi?» → Yo'q: natijalarni yuborish."""
+    if callback.from_user.id not in settings.admin_id_list:
+        await callback.answer("Ruxsat yo'q", show_alert=True)
+        return
+
+    from app.services import auto_report
+
+    await callback.answer("Natijalar tayyorlanmoqda...")
+    await _safe_edit(
+        callback.message,
+        text="📤 Natijalar (Word va Excel) tayyorlanmoqda va yuborilmoqda...",
+    )
+    try:
+        sent = await auto_report.send_auto_report(force=True)
+    except Exception:
+        logger.exception("Natijalarni yuborishda xato")
+        sent = False
+    if not sent:
+        await callback.message.answer(
+            "❌ Natijalarni yuborib bo'lmadi. Keyinroq «👥 Foydalanuvchilar va "
+            "natijalar» → «📍 Hammasi natijalari» orqali qayta urinib ko'ring.",
+            reply_markup=admin_menu(),
+        )
+
+
+@router.callback_query(F.data == "autorep_yes")
+async def auto_report_yes(callback: CallbackQuery, state: FSMContext) -> None:
+    """«Yana testdan o'tadiganlar bormi?» → Ha: admin panel tugmalari."""
+    if callback.from_user.id not in settings.admin_id_list:
+        await callback.answer("Ruxsat yo'q", show_alert=True)
+        return
+
+    from app.services import auto_report
+
+    auto_report.answer_yes()
+    await state.clear()
+    await callback.answer()
+    await _safe_edit(
+        callback.message,
+        text="👍 Yaxshi. Qolganlar testni tugatib, AI tekshirib bo'lgach yana so'rayman.",
+    )
+    await callback.message.answer(
+        "👋 Admin panelga xush kelibsiz.",
+        reply_markup=admin_menu(),
+    )
 
 
 # ==================== ASOSIY ADMIN CALLBACK ====================
@@ -772,7 +828,7 @@ async def export_all_results_handler(callback: CallbackQuery) -> None:
 
     await callback.answer("Eksport tayyorlanmoqda...")
     try:
-        report_path = await run_admin_export_only()
+        report_paths = await run_admin_export_only()
     except ExportBusyError:
         await callback.message.answer("Hozir boshqa eksport jarayoni davom etmoqda.")
         return
@@ -781,19 +837,21 @@ async def export_all_results_handler(callback: CallbackQuery) -> None:
         await callback.message.answer("❌ Eksportda xatolik yuz berdi.")
         return
 
-    try:
-        await callback.message.answer_document(
-            FSInputFile(report_path),
-            caption="📊 Foydalanuvchilar va test natijalari",
-        )
-    except Exception:
-        logger.exception("Hisobot yuborilmadi")
-        await callback.message.answer("❌ Hisobot yuborishda xatolik.")
-    finally:
+    captions = {".docx": "📊 Test natijalari (Word)", ".xlsx": "📈 Test natijalari (Excel)"}
+    for report_path in report_paths:
         try:
-            report_path.unlink(missing_ok=True)
-        except OSError:
-            logger.warning("Hisobot fayli o'chirilmadi: %s", report_path)
+            await callback.message.answer_document(
+                FSInputFile(report_path),
+                caption=captions.get(report_path.suffix, "📊 Test natijalari"),
+            )
+        except Exception:
+            logger.exception("Hisobot yuborilmadi: %s", report_path.name)
+            await callback.message.answer(f"❌ {report_path.name} ni yuborishda xatolik.")
+        finally:
+            try:
+                report_path.unlink(missing_ok=True)
+            except OSError:
+                logger.warning("Hisobot fayli o'chirilmadi: %s", report_path)
 
 
 @router.callback_query(F.data == "search_user")
@@ -881,8 +939,8 @@ async def unblock_user_handler(
         text="🔓 Foydalanuvchini blokdan chiqarish\n\n"
         "Foydalanuvchining Telegram ID sini yuboring:\n"
         "Masalan: 8834710739\n\n"
-        "⚠️ Uning barcha testlari, javoblari va audio fayllari "
-        "o'chiriladi — qayta topshira oladi.",
+        "⚠️ Uning barcha testlari va javoblari o'chiriladi "
+        "(audio fayllari arxivda saqlanadi) — qayta topshira oladi.",
         reply_markup=back_button("results"),
     )
     await callback.answer()
@@ -917,7 +975,7 @@ async def process_unblock_user(
         f"👤 {user.full_name or '—'} (@{user.username or '—'})\n"
         f"tg: {user.telegram_id}\n"
         f"Testlar soni: {len(attempts)}\n\n"
-        "Barcha testlari va audio fayllari o'chiriladi.\n"
+        "Barcha testlari o'chiriladi, audio fayllari arxivga olinadi.\n"
         "U yangidan test topshira oladi. Davom etasizmi?",
         reply_markup=unblock_confirm_keyboard(telegram_id),
     )
@@ -960,7 +1018,7 @@ async def unblock_confirm(
         callback.message,
         text=f"✅ {telegram_id} foydalanuvchi blokdan chiqarildi.\n\n"
         f"O'chirilgan testlar: {deleted['attempts']}\n"
-        f"O'chirilgan audio fayllar: {deleted['files']}\n\n"
+        f"Arxivga olingan audio fayllar: {deleted['files']}\n\n"
         "Endi u yangidan test topshira oladi.",
         reply_markup=results_menu(),
     )
@@ -1042,9 +1100,10 @@ async def cleanup_warning(callback: CallbackQuery) -> None:
         "Quyidagi ishlar bajariladi:\n"
         "• <b>5 daqiqadan</b> ko'p 'processing' da tiqilib qolgan "
         "attemptlar hisobot <b>navbatiga qayta qo'yiladi</b>\n"
-        "• <b>30 kundan</b> eski attemptlar, ularning javoblari va "
-        "audio fayllari o'chiriladi\n"
-        "• Hech qanday javobga bog'lanmagan audio fayllar o'chiriladi\n\n"
+        "• <b>30 kundan</b> eski attemptlar va javoblari o'chiriladi "
+        "(audio fayllari <b>arxivga olinadi</b>)\n"
+        "• Hech qanday javobga bog'lanmagan (chala yuklangan) audio "
+        "fayllar o'chiriladi\n\n"
         "Davom etasizmi?",
         reply_markup=cleanup_confirm_keyboard(),
         parse_mode="HTML",
@@ -1078,7 +1137,8 @@ async def cleanup_confirm(
         text="🧹 <b>Tozalash yakunlandi</b>\n\n"
         f"• Qayta navbatga qo'yilgan attemptlar: <b>{result['requeued_stuck']}</b>\n"
         f"• O'chirilgan eski attemptlar: <b>{result['deleted_attempts']}</b>\n"
-        f"• O'chirilgan audio fayllar: <b>{result['deleted_audio_files']}</b>",
+        f"• Arxivga olingan audio fayllar: <b>{result['archived_audio_files']}</b>\n"
+        f"• O'chirilgan chala audio fayllar: <b>{result['deleted_orphan_files']}</b>",
         reply_markup=results_menu(),
         parse_mode="HTML",
     )
@@ -1119,8 +1179,8 @@ async def reset_db_warning(callback: CallbackQuery) -> None:
     await _safe_edit(
         callback.message,
         text="⚠️ Diqqat!\n\n"
-        "Barcha foydalanuvchilar, natijalar va audio fayllar "
-        "o'chiriladi.\nBu amalni ortga qaytarib bo'lmaydi.",
+        "Barcha foydalanuvchilar va natijalar o'chiriladi "
+        "(audio fayllar arxivga olinadi).\nBu amalni ortga qaytarib bo'lmaydi.",
         reply_markup=confirm_reset_keyboard(),
     )
     await callback.answer()
@@ -1145,11 +1205,17 @@ async def reset_confirm(
         await callback.answer("Ruxsat yo'q", show_alert=True)
         return
 
+    # Audio fayllar o'chirilmaydi: javoblar o'chirilishidan oldin arxivga
+    # ko'chiriladi (aks holda "yetim audio" tozalashi ularni o'chirardi).
+    archive_dir = new_archive_dir("reset")
+    archived = await archive_attempt_audios(session, archive_dir)
+    archive_question_images(archive_dir)
+
     await delete_all_data(session)
 
     await _safe_edit(
         callback.message,
-        text="✅ Baza tozalandi.",
+        text=f"✅ Baza tozalandi.\n🎧 {archived} ta audio arxivda saqlandi.",
         reply_markup=admin_menu(),
     )
     await callback.answer()
