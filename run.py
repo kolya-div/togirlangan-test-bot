@@ -393,6 +393,12 @@ async def main():
         # Serverda: WebApp tayyor build (webapp/dist) dan beriladi, domen —
         # Railway'niki yoki WEBAPP_URL; ngrok va Vite dev server kerak emas.
         logger.info(f"🌐 WebApp URL: {settings.webapp_url}")
+        if not settings.webapp_url.startswith("https://"):
+            # Telegram WebApp faqat HTTPS bilan ochiladi
+            logger.error(
+                "❌ WebApp URL HTTPS emas — «Testni boshlash» tugmasi ishlamaydi. "
+                "Railway: Settings → Networking → Generate Domain (yoki WEBAPP_URL qo'ying)."
+            )
     else:
         # 6. Vite dev serverni ishga tushirish
         logger.info("🌐 Frontend (Vite) ishga tushmoqda...")

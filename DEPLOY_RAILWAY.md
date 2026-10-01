@@ -35,8 +35,8 @@ Bot servisini oching → **Variables** → quyidagilarni qo'shing:
 | `GEMINI_API_KEY` | Gemini kaliti (**pullik** tarif tavsiya etiladi) |
 | `GEMINI_RPM_PER_KEY` | Kalitingizning haqiqiy daqiqalik limiti (pullik: 300+) |
 | `REPORT_WORKERS` | `25` (pullik Gemini kaliti bilan) |
-| `DB_POOL_SIZE` | `15` |
-| `DB_MAX_OVERFLOW` | `15` |
+| `DB_POOL_SIZE` | `20` |
+| `DB_MAX_OVERFLOW` | `20` |
 | `REPORT_TIMEZONE` | `Asia/Tashkent` |
 
 Qo'shimcha (kerak bo'lsa): `OPENAI_API_KEY`, `GROQ_API_KEY`, `GEMINI_API_KEYS`,

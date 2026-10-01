@@ -82,3 +82,14 @@ async def test_thread_pool_allows_parallel_ai_calls():
 
     await asyncio.gather(*(asyncio.to_thread(blocking_call) for _ in range(report_worker.REPORT_WORKERS)))
     assert running["max"] == report_worker.REPORT_WORKERS
+
+
+@pytest.mark.anyio
+async def test_evaluation_retries_on_server_error():
+    # Oldin `random` import qilinmagani uchun 500/503 xatoda retry o'rniga NameError chiqardi.
+    fn = AsyncMock(side_effect=[RuntimeError("503 UNAVAILABLE"), {"score": 70}])
+    with patch.object(evaluation_service.asyncio, "sleep", AsyncMock()):
+        result = await evaluation_service._evaluate_with_retry("gemini", fn, "Soru?", "Cevap")
+
+    assert result == {"score": 70}
+    assert fn.await_count == 2
