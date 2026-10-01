@@ -31,6 +31,10 @@ Test imtihon interfeysi — **React/Vite WebApp** (Telegram WebApp orqali ochila
 | AI | Groq (Whisper / gpt-oss), Gemini, OpenAI |
 | Tunnel | pyngrok |
 
+## Serverga joylash (Railway)
+
+Qadam-baqadam qo'llanma: [DEPLOY_RAILWAY.md](DEPLOY_RAILWAY.md)
+
 ## Ishga tushirish
 
 ```bash

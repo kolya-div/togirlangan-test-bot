@@ -1,6 +1,7 @@
+import os
 from functools import lru_cache
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -9,7 +10,13 @@ class Settings(BaseSettings):
     admin_ids: str
 
     database_url: str = "postgresql+asyncpg://postgres:123@localhost:5432/turkish"
-    webapp_url: str = "http://localhost:8000"
+    # Bo'sh qolsa: Railway'da https://<RAILWAY_PUBLIC_DOMAIN>, aks holda localhost
+    # (lokalda run.py ngrok manzilini o'zi qo'yadi). O'z domeningiz bo'lsa:
+    # WEBAPP_URL=https://test.sizningdomen.uz
+    webapp_url: str = ""
+
+    # HTTP port — Railway o'zi PORT beradi
+    port: int = 8000
 
     # STT (Speech-to-Text) sozlamalari
     stt_provider: str = "gemini"  # "gemini", "groq" yoki "openai"
@@ -77,6 +84,14 @@ class Settings(BaseSettings):
     @field_validator("database_url")
     @classmethod
     def validate_database_url(cls, v: str) -> str:
+        # Railway/Heroku "postgresql://" yoki "postgres://" beradi — asyncpg
+        # drayverini o'zimiz qo'shamiz.
+        for prefix in ("postgresql://", "postgres://"):
+            if v.startswith(prefix):
+                v = "postgresql+asyncpg://" + v[len(prefix):]
+                break
+        # asyncpg "sslmode" ni tanimaydi — "ssl" ga o'giriladi
+        v = v.replace("sslmode=", "ssl=")
         if not v.startswith("postgresql+asyncpg://"):
             raise ValueError(
                 "Faqat PostgreSQL qo'llab-quvvatlanadi. "
@@ -84,6 +99,14 @@ class Settings(BaseSettings):
                 "postgresql+asyncpg://user:password@host:5432/dbname"
             )
         return v
+
+    @model_validator(mode="after")
+    def _default_webapp_url(self):
+        if not self.webapp_url:
+            domain = os.getenv("RAILWAY_PUBLIC_DOMAIN")
+            self.webapp_url = f"https://{domain}" if domain else f"http://localhost:{self.port}"
+        self.webapp_url = self.webapp_url.rstrip("/")
+        return self
 
     model_config = SettingsConfigDict(
         env_file=".env",
