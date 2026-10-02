@@ -139,7 +139,8 @@ export default function AudioRecorder({
 
         streamRef.current = stream
         const mimeType = getSupportedMimeType()
-        const options = mimeType ? { mimeType } : {}
+        // 64 kbit/s — telefon mikrofonidan aniqroq yozuv (standart ~32 kbit/s)
+        const options = mimeType ? { mimeType, audioBitsPerSecond: 64000 } : { audioBitsPerSecond: 64000 }
         let recorder
 
         try {

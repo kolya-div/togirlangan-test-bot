@@ -1,8 +1,11 @@
 import asyncio
+import functools
 import json
+import re
 import logging
 import random
 import threading
+import base64
 from pathlib import Path
 from typing import Optional
 
@@ -112,6 +115,7 @@ _SYSTEM_PROMPT = (
 async def evaluate_answer(
     question: str,
     transcript: str,
+    audio_path: str | Path | None = None,
 ) -> dict:
     """
     O'quvchining turk tilidagi javobini AI orqali baholaydi.
@@ -123,21 +127,26 @@ async def evaluate_answer(
     # GEMINI_API_KEYS (faqat ikkinchisi berilsa ham Gemini ishlatiladi).
     if settings.gemini_keys_list:
         try:
-            return await _evaluate_with_retry("gemini", _evaluate_with_gemini, question, transcript)
+            # Gemini audioni ham eshitadi — talaffuz va ravonlik audiodan baholanadi
+            gemini_fn = functools.partial(_evaluate_with_gemini, audio_path=audio_path)
+            result = await _evaluate_with_retry("gemini", gemini_fn, question, transcript)
+            return _apply_strictness(result, transcript)
         except Exception as e:
             logger.warning(f"Gemini baholashda xato: {e}. Keyingi provayderga o'tiladi.")
 
     # Groq bilan urinib ko'ramiz (tekin tier)
     if getattr(settings, "groq_api_key", None):
         try:
-            return await _evaluate_with_retry("groq", _evaluate_with_groq, question, transcript)
+            result = await _evaluate_with_retry("groq", _evaluate_with_groq, question, transcript)
+            return _apply_strictness(result, transcript)
         except Exception as e:
             logger.warning(f"Groq baholashda xato: {e}. OpenAI ga o'tiladi.")
     
     # OpenAI ga murojaat
     if getattr(settings, "openai_api_key", None):
         try:
-            return await _evaluate_with_retry("openai", _evaluate_with_openai, question, transcript)
+            result = await _evaluate_with_retry("openai", _evaluate_with_openai, question, transcript)
+            return _apply_strictness(result, transcript)
         except Exception as e:
             logger.error(f"OpenAI baholashda xato: {e}")
             raise RuntimeError("AI baholash servisi vaqtinchalik ishlamayapti.")
@@ -231,7 +240,9 @@ async def _evaluate_with_openai(question: str, transcript: str) -> dict:
     return _parse_and_validate(content)
 
 
-async def _evaluate_with_gemini(question: str, transcript: str) -> dict:
+async def _evaluate_with_gemini(
+    question: str, transcript: str, audio_path: str | Path | None = None,
+) -> dict:
     """Gemini orqali baholash — bepul. Bir nechta kalit bo'lsa navbat bilan."""
     import asyncio
     import google.genai as genai_mod
@@ -253,11 +264,18 @@ async def _evaluate_with_gemini(question: str, transcript: str) -> dict:
 
     # Timeout: osilib qolgan so'rov worker'ni cheksiz band qilmasin
     # (transkripsiyada ham xuddi shunday — TRANSCRIPTION_TIMEOUT).
+    parts = [{"text": EVALUATION_SYSTEM_PROMPT + "\n\n" + prompt}]
+    audio_part = _audio_part(audio_path)
+    if audio_part:
+        parts.append({"text": "## O'quvchining asl audio javobi (talaffuz va ravonlikni shundan baholang):"})
+        parts.append(audio_part)
+
     response = await asyncio.wait_for(
         asyncio.to_thread(
             client.models.generate_content,
             model=model,
-            contents=[{"parts": [{"text": EVALUATION_SYSTEM_PROMPT + "\n\n" + prompt}]}],
+            contents=[{"parts": parts}],
+            config={"temperature": 0},
         ),
         timeout=EVAL_TIMEOUT,
     )
@@ -390,7 +408,11 @@ def _validate_consistency(data: dict) -> dict:
     grammar_score = scores.get("grammar", _MAX_GRAMMAR)
     score_reasons = data.get("score_reasons", [])
 
-    grammar_mistakes = [m for m in mistakes if m.get("type") == "grammar"]
+    # suffix va word_order ham grammatik xato — oldin faqat "grammar" sanalardi
+    # va qo'shimcha xatolari bo'lsa ham grammar balli 25 ga ko'tarilardi
+    grammar_mistakes = [
+        m for m in mistakes if m.get("type") in ("grammar", "suffix", "word_order")
+    ]
 
     # Holat A: grammatik xato yo'q, lekin grammar_score past — noto'g'ri penalizatsiya
     if is_gram is True and len(grammar_mistakes) == 0:
@@ -419,3 +441,111 @@ def _validate_consistency(data: dict) -> dict:
     data["scores"] = scores
     data["score_reasons"] = score_reasons
     return data
+
+
+# ─── Audio va qat'iy baholash ───────────────────────────────────
+
+# Audio juda katta bo'lsa (inline limit ~20MB) — faqat transkript bilan baholanadi
+_MAX_EVAL_AUDIO_BYTES = 15 * 1024 * 1024
+
+
+def _audio_part(audio_path: str | Path | None) -> dict | None:
+    """Gemini uchun audio qismi; fayl yo'q/katta bo'lsa None."""
+    if not audio_path:
+        return None
+    try:
+        path = Path(audio_path)
+        if not path.is_file() or path.stat().st_size > _MAX_EVAL_AUDIO_BYTES:
+            return None
+        from app.services.transcription_service import _detect_mime_type
+
+        return {
+            "inline_data": {
+                "mime_type": _detect_mime_type(path),
+                "data": base64.b64encode(path.read_bytes()).decode("utf-8"),
+            }
+        }
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Baholash uchun audio o'qilmadi (%s): %s", audio_path, exc)
+        return None
+
+
+_SCORE_MAX = {
+    "grammar": 25,
+    "vocabulary": 25,
+    "pronunciation": 20,
+    "sentence_structure": 15,
+    "relevance": 15,
+}
+_FILLER_RE = re.compile(r"^(e+|ı+|i+|a+|m+|h+m+|ee+m+)$")
+_UNCLEAR = "[anlaşılmıyor]"
+
+# (mazmunli so'zlar soni shundan kam bo'lsa, maksimal ball)
+_LENGTH_CAPS = ((3, 10), (8, 35), (15, 55))
+
+
+def _meaningful_words(transcript: str) -> int:
+    text = (transcript or "").replace(_UNCLEAR, " ")
+    words = re.findall(r"[^\W\d_]+", text.lower())
+    return sum(1 for w in words if not _FILLER_RE.match(w))
+
+
+def _apply_strictness(data: dict, transcript: str) -> dict:
+    """AI javobidan keyin kod darajasidagi qat'iy qoidalar.
+
+    - Umumiy ball = kategoriya ballari yig'indisi (har biri o'z maksimumida).
+      Oldin AI "score" ni alohida yozardi va u kategoriyalardan baland bo'lib
+      qolardi.
+    - Juda qisqa javob yuqori ball ololmaydi (yomon gapirgan o'quvchi 2-3
+      so'z aytsa ham baland baho olardi).
+    - Tushunarsiz joylar ko'p bo'lsa ball cheklanadi.
+    """
+    scores = data.get("scores")
+    if isinstance(scores, dict) and any(scores.get(k) for k in _SCORE_MAX):
+        total = 0
+        for key, max_value in _SCORE_MAX.items():
+            try:
+                value = int(scores.get(key, 0))
+            except (TypeError, ValueError):
+                value = 0
+            scores[key] = max(0, min(value, max_value))
+            total += scores[key]
+        data["score"] = total
+
+    try:
+        score = max(0, min(100, int(data.get("score", 0))))
+    except (TypeError, ValueError):
+        score = 0
+
+    cap = 100
+    words = _meaningful_words(transcript)
+    for limit, max_score in _LENGTH_CAPS:
+        if words < limit:
+            cap = max_score
+            break
+    if (transcript or "").count(_UNCLEAR) >= 3:
+        cap = min(cap, 50)
+
+    if score > cap:
+        logger.info("Ball %d → %d ga cheklandi (so'zlar=%d)", score, cap, words)
+        data.setdefault("score_reasons", []).append({
+            "category": "relevance",
+            "explanation_uz": (
+                f"Javob juda qisqa yoki tushunarsiz ({words} ta so'z) — "
+                f"ball {cap} dan oshmaydi."
+            ),
+        })
+        score = cap
+    data["score"] = score
+    data["level"] = _level_for(score)
+    return data
+
+
+def _level_for(score: int) -> str | None:
+    if score >= 86:
+        return "C1"
+    if score >= 68:
+        return "B2"
+    if score >= 50:
+        return "B1"
+    return None

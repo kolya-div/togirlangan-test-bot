@@ -121,7 +121,9 @@ async def _process_attempt_and_report_inner(attempt_id: int) -> None:
                 total=total,
             )
             try:
-                evaluation = await evaluate_answer(question.text, item["transcript"])
+                evaluation = await evaluate_answer(
+                    question.text, item["transcript"], audio_path=item["audio_path"],
+                )
                 item["score"] = evaluation.get("score", 0)
                 item["feedback"] = json.dumps(
                     {

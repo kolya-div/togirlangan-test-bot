@@ -127,6 +127,8 @@ async def _transcribe_with_gemini(audio_path: Path) -> str:
                 ]
             }
         ],
+        # 0 — model "ijod" qilmasin, eshitilganini yozsin
+        config={"temperature": 0},
     )
 
     result = response.text if response.text else ""
