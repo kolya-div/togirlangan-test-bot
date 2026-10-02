@@ -3,8 +3,9 @@ AI hamma javoblarni tekshirib bo'lgach adminlardan so'raladi:
 "Javoblar tayyor. Yana testdan o'tadiganlar bormi?" [Ha] [Yo'q]
 - bir nechta test ketma-ket baholansa — bitta savol (debounce)
 - hali tekshirilayotgan test bo'lsa — kutadi, keyin so'raydi
-- javob kutilayotganda qayta so'ralmaydi; «Ha» dan keyin yangi testlar
-  tekshirilgach yana so'raladi
+- yangi natija bo'lmasa qayta so'ralmaydi; admin javob bermagan bo'lsa ham
+  yangi testlar tekshirilgach yana so'raladi
+- xato bilan tugagan test ham savolni ishga tushiradi
 - «Yo'q» → Word + Excel adminlarga, «Ha» → admin panel tugmalari
 """
 
@@ -118,7 +119,7 @@ async def test_ask_admins_sends_yes_no_buttons_once():
         auto_report.notify_attempt_evaluated()
         await auto_report.stop()
         assert await auto_report.ask_admins() == 1
-        # Javob kutilayotganda qayta so'ralmaydi
+        # Yangi natija bo'lmasa qayta so'ralmaydi
         assert await auto_report.ask_admins() == 0
 
         text = send.await_args.args[1]
@@ -182,3 +183,54 @@ async def test_buttons_reject_non_admin():
     with patch.object(auto_report, "send_auto_report", AsyncMock()) as send:
         await admin.auto_report_no(cb)
     send.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_unanswered_prompt_does_not_block_next_one():
+    # Admin birinchi savolga javob bermadi — keyingi testlar tekshirilgach
+    # savol baribir yana chiqishi kerak (oldin chiqmay qolardi).
+    from app.bot.bot import bot
+
+    with patch.object(bot, "send_message", AsyncMock()):
+        auto_report.notify_attempt_evaluated()
+        await auto_report.stop()
+        assert await auto_report.ask_admins() == 1
+
+        auto_report.notify_attempt_evaluated()
+        await auto_report.stop()
+        assert await auto_report.ask_admins() == 1
+
+
+@pytest.mark.anyio
+async def test_stuck_processing_in_db_does_not_block_prompt():
+    async with TestSessionLocal() as s:
+        user = User(telegram_id=5, full_name="X", is_registered=True)
+        s.add(user)
+        await s.flush()
+        s.add(TestAttempt(user_id=user.id, status="processing"))
+        await s.commit()
+    from app.services import report_worker
+
+    # Navbat bo'sh (boshqa testlardan qolgan holat ta'sir qilmasin)
+    with patch.object(report_worker, "_pending_attempts", set()), \
+            patch.object(report_worker, "_report_queue", None):
+        assert await auto_report._all_evaluated() is True
+
+
+@pytest.mark.anyio
+async def test_failed_attempt_still_triggers_prompt():
+    from app.services import report_worker
+
+    notify = patch.object(auto_report, "notify_attempt_evaluated")
+    queue = asyncio.Queue()
+    await queue.put(42)
+    with notify as n, \
+            patch.object(report_worker, "_ensure_queue", return_value=queue), \
+            patch.object(report_worker, "_get_process_fn",
+                         return_value=AsyncMock(side_effect=RuntimeError("AI xato"))), \
+            patch.object(report_worker.job_tracker, "start_processing", AsyncMock()), \
+            patch.object(report_worker.job_tracker, "fail", AsyncMock()):
+        task = asyncio.create_task(report_worker._report_worker(0))
+        await asyncio.wait_for(queue.join(), 2)
+        task.cancel()
+    n.assert_called_once()

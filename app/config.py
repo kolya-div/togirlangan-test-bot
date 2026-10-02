@@ -54,7 +54,7 @@ class Settings(BaseSettings):
     # AI hamma javoblarni tekshirib bo'lgach Word + Excel hisobot adminlarga
     # avtomatik yuboriladi — oxirgi baholashdan shuncha soniya jimlikdan keyin
     auto_report_enabled: bool = True
-    auto_report_delay_seconds: int = 180
+    auto_report_delay_seconds: int = 30
 
     # Logging sozlamalari
     log_level: str = "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
