@@ -27,6 +27,7 @@ export default function App() {
     const [attemptStatus, setAttemptStatus] = useState(null)
     const [startingTest, setStartingTest] = useState(false)
     const [entryDialog, setEntryDialog] = useState(null)
+    const [answerSending, setAnswerSending] = useState(false)
 
     // Avtorizatsiya: user_id faqat Telegram imzosi bilan tasdiqlangan
     // initData dan (backend POST /api/init orqali) olinadi. Frontend
@@ -192,6 +193,7 @@ export default function App() {
     }, [])
 
     useEffect(() => {
+        setAnswerSending(false)
         if (phase === 'prep' && current >= 0) {
             startTimer(questions[current].preparation_seconds, () => {
                 setPhase('record')
@@ -246,6 +248,12 @@ export default function App() {
     const handleRecordingStop = useCallback(() => {
         moveToNextQuestion()
     }, [moveToNextQuestion])
+
+    // "To'xtatish" bosildi (yoki vaqt tugadi) — yuklash davomida taymer to'xtaydi
+    const handleRecordingStopping = useCallback(() => {
+        clearInterval(timerRef.current)
+        setAnswerSending(true)
+    }, [])
 
     const handleRecordingError = useCallback(() => {
         // Xato bo'lsa — avtomatik keyingi savolga o't (skip qil)
@@ -523,15 +531,18 @@ export default function App() {
 
             {phase === 'record' && (
                 <>
-                    <div className="phase-status record">
-                        Ovoz yozilmoqda...
-                    </div>
+                    {!answerSending && (
+                        <div className="phase-status record">
+                            Ovoz yozilmoqda...
+                        </div>
+                    )}
                     <AudioRecorder
                         attemptId={attemptId}
                         questionId={q.id}
                         initData={initData}
                         onUploaded={handleRecordingStop}
                         registerStop={(fn) => { stopRecorderRef.current = fn }}
+                        onStopping={handleRecordingStopping}
                         onError={handleRecordingError}
                     />
                 </>

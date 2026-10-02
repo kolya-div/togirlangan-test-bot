@@ -66,13 +66,24 @@ export async function createAttempt(initData, chatId = null) {
     return res.json()
 }
 
+function audioExtension(mimeType = '') {
+    const type = mimeType.toLowerCase()
+    if (type.includes('mp4') || type.includes('aac') || type.includes('m4a')) return 'mp4'
+    if (type.includes('ogg')) return 'ogg'
+    if (type.includes('wav')) return 'wav'
+    if (type.includes('mpeg') || type.includes('mp3')) return 'mp3'
+    return 'webm'
+}
+
 export async function uploadAnswer(attemptId, questionId, audioBlob, initData) {
     if (!audioBlob || audioBlob.size === 0) {
         throw new Error("Audio bo'sh")
     }
 
     const form = new FormData()
-    form.append("audio", audioBlob, "answer.webm")
+    // Fayl kengaytmasi haqiqiy formatga mos bo'lsin: iPhone audio/mp4 yozadi —
+    // ".webm" deb yuborilsa, server/AI uni noto'g'ri formatda o'qiydi.
+    form.append("audio", audioBlob, `answer.${audioExtension(audioBlob.type)}`)
     form.append("init_data", initData || "")
 
     const res = await fetchWithTimeout(

@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback } from 'react'
+import { useRef, useEffect, useCallback, useState } from 'react'
 import { uploadAnswer } from '../api.js'
 
 const MIN_AUDIO_BYTES = 1024
@@ -38,6 +38,7 @@ export default function AudioRecorder({
     initData,
     onUploaded,
     registerStop,
+    onStopping,
     onError
 }) {
     const mediaRecorder = useRef(null)
@@ -45,6 +46,8 @@ export default function AudioRecorder({
     const streamRef = useRef(null)
     const stoppedRef = useRef(false)
     const mountedRef = useRef(false)
+    // "To'xtatish" bosildi — javob yuborilmoqda (tugma o'rniga holat ko'rsatiladi)
+    const [sending, setSending] = useState(false)
 
     const cleanup = useCallback(() => {
         cleanupStream(streamRef.current)
@@ -208,6 +211,11 @@ export default function AudioRecorder({
     const stopRecording = useCallback(() => {
         if (stoppedRef.current) return
         stoppedRef.current = true
+        // Darhol ko'rinadigan javob: yuklash sekin tarmoqda bir necha soniya
+        // davom etadi — oldin bu vaqtda ekran o'zgarmas va tugma
+        // "ishlamayapti" bo'lib ko'rinardi (ayniqsa oxirgi savolda).
+        if (mountedRef.current) setSending(true)
+        onStopping?.()
 
         const recorder = mediaRecorder.current
         if (recorder && recorder.state !== 'inactive') {
@@ -221,7 +229,7 @@ export default function AudioRecorder({
             cleanup()
             handleUploadResult({ success: true })
         }
-    }, [cleanup, handleUploadResult])
+    }, [cleanup, handleUploadResult, onStopping])
 
     useEffect(() => {
         registerStop?.(stopRecording)
@@ -233,12 +241,18 @@ export default function AudioRecorder({
                 width: 8,
                 height: 8,
                 borderRadius: '50%',
-                background: '#16A34A',
-                animation: 'pulse 1s infinite',
+                background: sending ? '#9CA3AF' : '#16A34A',
+                animation: sending ? 'none' : 'pulse 1s infinite',
             }} />
-            <button className="btn btn-danger" onClick={stopRecording}>
-                To'xtatish
-            </button>
+            {sending ? (
+                <div className="phase-status uploading" style={{ margin: 0 }}>
+                    Javob yuborilmoqda...
+                </div>
+            ) : (
+                <button className="btn btn-danger" onClick={stopRecording}>
+                    To'xtatish
+                </button>
+            )}
         </div>
     )
 }
