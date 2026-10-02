@@ -1,3 +1,6 @@
+import asyncio
+import logging
+
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
@@ -60,6 +63,47 @@ _MIGRATIONS = [
 ]
 
 
+_logger = logging.getLogger(__name__)
+
+# Ishga tushishda bazaga ulanish urinishlari (soniya): PostgreSQL hali
+# ishga tushmagan yoki ulanish bir martalik uzilgan bo'lsa ham bot yiqilmaydi.
+_DB_CONNECT_DELAYS = (2, 4, 8, 16)
+
+
+def _db_location() -> str:
+    """Parolsiz manzil (log uchun): host:port/baza."""
+    try:
+        url = engine.url
+        return f"{url.host}:{url.port or 5432}/{url.database}"
+    except Exception:  # noqa: BLE001
+        return "?"
+
+
+async def _wait_for_database() -> None:
+    for attempt in range(len(_DB_CONNECT_DELAYS) + 1):
+        try:
+            async with engine.connect() as connection:
+                await connection.execute(text("SELECT 1"))
+            return
+        except Exception as exc:  # noqa: BLE001
+            if attempt == len(_DB_CONNECT_DELAYS):
+                _logger.error(
+                    "❌ PostgreSQL bazasiga ulanib bo'lmadi (%s): %s\n"
+                    "   Tekshiring: 1) PostgreSQL ishlayaptimi (Windows: services.msc → "
+                    "postgresql-x64-...); 2) .env dagi DATABASE_URL to'g'rimi "
+                    "(host, port, parol, baza nomi); 3) baza yaratilganmi.",
+                    _db_location(), type(exc).__name__,
+                )
+                raise
+            delay = _DB_CONNECT_DELAYS[attempt]
+            _logger.warning(
+                "⚠️ Bazaga ulanib bo'lmadi (%s): %s — %d soniyadan keyin qayta urinish (%d/%d)",
+                _db_location(), type(exc).__name__, delay, attempt + 1, len(_DB_CONNECT_DELAYS),
+            )
+            await engine.dispose()
+            await asyncio.sleep(delay)
+
+
 async def init_db() -> None:
     from app.database.models import (
         User,
@@ -67,6 +111,8 @@ async def init_db() -> None:
         TestAttempt,
         Answer,
     )
+
+    await _wait_for_database()
 
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
