@@ -55,6 +55,16 @@ async def _startup_recovery() -> None:
         logger.exception("Test holatini DB dan yuklab bo'lmadi")
 
     try:
+        from app.database.repositories import sync_admin_flags
+
+        async with SessionLocal() as session:
+            changed = await sync_admin_flags(session, settings.admin_id_list)
+            if changed:
+                logger.info("Admin ro'yxati ADMIN_IDS ga moslandi: %d ta o'zgarish", changed)
+    except Exception:
+        logger.exception("Admin ro'yxatini moslab bo'lmadi")
+
+    try:
         async with SessionLocal() as session:
             requeued = await requeue_stuck_processing(session, stale_minutes=0)
             if requeued:
