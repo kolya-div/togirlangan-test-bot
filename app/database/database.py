@@ -16,22 +16,52 @@ class Base(DeclarativeBase):
     pass
 
 
-# Connection pool: NullPool o'rniga real pool ishlatiladi.
-# Pool size + max_overflow — 100+ user uchun yetarli zaxira.
-# webapp (30) + report workers (10) + bot (15) + zahira (15) = ~60 max.
-# O'lchamlar database.py config'da: DB_POOL_SIZE / DB_MAX_OVERFLOW.
-pool_size = max(20, getattr(settings, "db_pool_size", 30))
-max_overflow = max(20, getattr(settings, "db_max_overflow", 30))
+IS_SQLITE = settings.database_url.startswith("sqlite")
 
-engine = create_async_engine(
-    settings.database_url,
-    echo=False,
-    pool_size=pool_size,
-    max_overflow=max_overflow,
-    pool_timeout=30,
-    pool_pre_ping=True,  # Uzilgan connection'larni avtomatik aniqlash
-    pool_recycle=1800,   # 30 daqiqada eski connection'larni yangilash
-)
+if IS_SQLITE:
+    # SQLite: bitta fayl (data/bot.db), alohida server kerak emas.
+    # WAL rejimi — yozish paytida ham o'qish mumkin; busy_timeout — bir
+    # vaqtda yozganlar "database is locked" xatosi o'rniga navbat kutadi.
+    from pathlib import Path
+
+    from sqlalchemy import event
+
+    _db_file = settings.database_url.split(":///", 1)[1]
+    if _db_file and _db_file != ":memory:":
+        Path(_db_file).parent.mkdir(parents=True, exist_ok=True)
+
+    engine = create_async_engine(
+        settings.database_url,
+        echo=False,
+        connect_args={"timeout": 60},
+        pool_size=10,
+        max_overflow=10,
+        pool_timeout=60,
+    )
+
+    @event.listens_for(engine.sync_engine, "connect")
+    def _sqlite_pragmas(dbapi_connection, _record) -> None:
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.execute("PRAGMA busy_timeout=60000")
+        cursor.execute("PRAGMA foreign_keys=ON")  # ondelete=CASCADE ishlashi uchun
+        cursor.close()
+else:
+    # PostgreSQL: real connection pool.
+    # O'lchamlar: DB_POOL_SIZE / DB_MAX_OVERFLOW.
+    pool_size = max(20, getattr(settings, "db_pool_size", 30))
+    max_overflow = max(20, getattr(settings, "db_max_overflow", 30))
+
+    engine = create_async_engine(
+        settings.database_url,
+        echo=False,
+        pool_size=pool_size,
+        max_overflow=max_overflow,
+        pool_timeout=30,
+        pool_pre_ping=True,  # Uzilgan connection'larni avtomatik aniqlash
+        pool_recycle=1800,   # 30 daqiqada eski connection'larni yangilash
+    )
 
 SessionLocal = async_sessionmaker(
     engine,
@@ -117,6 +147,10 @@ async def init_db() -> None:
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
         for statement in _MIGRATIONS:
+            if IS_SQLITE and "ADD COLUMN IF NOT EXISTS" in statement:
+                # SQLite bu sintaksisni bilmaydi; yangi bazada ustunlar
+                # create_all bilan allaqachon yaratilgan
+                continue
             try:
                 await connection.execute(text(statement))
             except Exception:

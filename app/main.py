@@ -172,6 +172,13 @@ async def health_check():
     """Server holati va DB connection monitoring."""
     from sqlalchemy import text
     try:
+        from app.database.database import IS_SQLITE
+
+        if IS_SQLITE:
+            async with SessionLocal() as session:
+                await session.execute(text("SELECT 1"))
+            return {"status": "ok", "db": {"engine": "sqlite"}}
+
         async with SessionLocal() as session:
             result = await session.execute(
                 text("SELECT count(*) FROM pg_stat_activity WHERE datname = current_database()")

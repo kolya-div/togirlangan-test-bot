@@ -22,9 +22,18 @@ def test_database_url_sslmode_converted_for_asyncpg():
     assert s.database_url == "postgresql+asyncpg://u:p@h/db?ssl=require"
 
 
-def test_non_postgres_rejected():
+def test_unsupported_database_rejected():
     with pytest.raises(ValueError):
-        Settings(**BASE, database_url="sqlite:///x.db")
+        Settings(**BASE, database_url="mysql://u:p@h/db")
+
+
+@pytest.mark.parametrize("url,expected", [
+    ("sqlite:///./data/bot.db", "sqlite+aiosqlite:///./data/bot.db"),
+    ("sqlite+aiosqlite:///./data/bot.db", "sqlite+aiosqlite:///./data/bot.db"),
+    ("", "sqlite+aiosqlite:///./data/bot.db"),  # bo'sh → standart SQLite
+])
+def test_sqlite_accepted(url, expected):
+    assert Settings(**BASE, database_url=url).database_url == expected
 
 
 def test_webapp_url_from_railway_domain(monkeypatch):
