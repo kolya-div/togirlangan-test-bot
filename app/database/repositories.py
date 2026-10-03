@@ -1,6 +1,6 @@
 import json
 
-from sqlalchemy import Date, delete, func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -207,6 +207,15 @@ async def get_test_settings(session: AsyncSession) -> TestSettings | None:
     return result.scalar_one_or_none()
 
 
+def _utc_day_bounds():
+    """Bugungi UTC kun oralig'i [boshi, ertasi) — CAST(... AS DATE) o'rniga,
+    chunki SQLite'da u sanani emas, faqat yilni qaytaradi."""
+    from datetime import datetime, timedelta
+
+    start = datetime.combine(utcnow().date(), datetime.min.time())
+    return start, start + timedelta(days=1)
+
+
 async def create_or_update_test_settings(
     session: AsyncSession,
     test_mode: str,
@@ -216,10 +225,10 @@ async def create_or_update_test_settings(
     # Invalidate cache when settings are updated
     await test_settings_cache.clear()
     
-    today = utcnow().date()
+    day_start, day_end = _utc_day_bounds()
     result = await session.execute(
         select(TestSettings).where(
-            TestSettings.date.cast(Date) == today
+            TestSettings.date >= day_start, TestSettings.date < day_end,
         ).order_by(TestSettings.id.desc()).limit(1)
     )
     settings_row = result.scalar_one_or_none()
@@ -285,11 +294,12 @@ async def get_user_attempt_count_today(
     user_id: int,
 ) -> int:
     """Foydalanuvchining bugun qancha test topshirganini hisoblash."""
-    today = utcnow().date()
+    day_start, day_end = _utc_day_bounds()
     result = await session.execute(
         select(func.count(TestAttempt.id)).where(
             TestAttempt.user_id == user_id,
-            TestAttempt.started_at.cast(Date) == today,
+            TestAttempt.started_at >= day_start,
+            TestAttempt.started_at < day_end,
         )
     )
     return int(result.scalar_one())

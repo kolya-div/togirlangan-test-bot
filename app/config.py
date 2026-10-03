@@ -9,7 +9,9 @@ class Settings(BaseSettings):
     bot_token: str
     admin_ids: str
 
-    database_url: str = "postgresql+asyncpg://postgres:123@localhost:5432/turkish"
+    # Standart: SQLite (data/bot.db) — alohida baza serveri kerak emas.
+    # PostgreSQL ham ishlaydi: postgresql+asyncpg://user:pass@host:5432/db
+    database_url: str = "sqlite+aiosqlite:///./data/bot.db"
     # Bo'sh qolsa: Railway'da https://<RAILWAY_PUBLIC_DOMAIN>, aks holda localhost
     # (lokalda run.py ngrok manzilini o'zi qo'yadi). O'z domeningiz bo'lsa:
     # WEBAPP_URL=https://test.sizningdomen.uz
@@ -84,6 +86,14 @@ class Settings(BaseSettings):
     @field_validator("database_url")
     @classmethod
     def validate_database_url(cls, v: str) -> str:
+        v = (v or "").strip()
+        if not v:
+            return "sqlite+aiosqlite:///./data/bot.db"
+        # SQLite: "sqlite:///fayl.db" → async drayver
+        if v.startswith("sqlite:///"):
+            v = "sqlite+aiosqlite:///" + v[len("sqlite:///"):]
+        if v.startswith("sqlite+aiosqlite:///"):
+            return v
         # Railway/Heroku "postgresql://" yoki "postgres://" beradi — asyncpg
         # drayverini o'zimiz qo'shamiz.
         for prefix in ("postgresql://", "postgres://"):
@@ -94,9 +104,8 @@ class Settings(BaseSettings):
         v = v.replace("sslmode=", "ssl=")
         if not v.startswith("postgresql+asyncpg://"):
             raise ValueError(
-                "Faqat PostgreSQL qo'llab-quvvatlanadi. "
-                "DATABASE_URL quyidagi formatda bo'lishi kerak: "
-                "postgresql+asyncpg://user:password@host:5432/dbname"
+                "DATABASE_URL noto'g'ri. SQLite: sqlite+aiosqlite:///./data/bot.db "
+                "yoki PostgreSQL: postgresql+asyncpg://user:password@host:5432/dbname"
             )
         return v
 

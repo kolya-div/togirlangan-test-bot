@@ -26,7 +26,7 @@ Test imtihon interfeysi — **React/Vite WebApp** (Telegram WebApp orqali ochila
 |------|-------------|
 | Backend | Python 3.13, FastAPI, SQLAlchemy 2 (async) |
 | Bot | aiogram 3.x |
-| DB | PostgreSQL (asyncpg) — yagona qo'llab-quvvatlanadigan DB |
+| DB | SQLite (standart, `data/bot.db`) yoki PostgreSQL (asyncpg) |
 | Frontend | React 18 + Vite (WebApp) |
 | AI | Groq (Whisper / gpt-oss), Gemini, OpenAI |
 | Tunnel | pyngrok |
@@ -36,6 +36,15 @@ Test imtihon interfeysi — **React/Vite WebApp** (Telegram WebApp orqali ochila
 Qadam-baqadam qo'llanma: [DEPLOY_RAILWAY.md](DEPLOY_RAILWAY.md)
 
 ## Ishga tushirish
+
+**Windows — eng oson yo'l:** `.env` faylni to'ldiring va `start_bot.bat` ustiga
+ikki marta bosing. U yangilanishlarni oladi, kerakli kutubxonalarni o'rnatadi
+va botni ishga tushiradi (yiqilsa — o'zi qayta yoqadi).
+
+Baza: `DATABASE_URL` bo'sh bo'lsa **SQLite** ishlatiladi (`data/bot.db`) —
+PostgreSQL o'rnatish shart emas.
+
+Qo'lda:
 
 ```bash
 # 1. Virtual muhit va bog'liqliklar
@@ -65,7 +74,7 @@ python run.py
 |-------|------|-------|
 | `BOT_TOKEN` | @BotFather dan olinadi | `123456789:AAAbBcC...` |
 | `ADMIN_IDS` | Admin Telegram ID'lari (vergul bilan) | `123456789,987654321` |
-| `DATABASE_URL` | PostgreSQL ulanish URL | `postgresql+asyncpg://postgres:123@localhost:5432/turkish` |
+| `DATABASE_URL` | Bo'sh — SQLite (`data/bot.db`); yoki PostgreSQL URL | `postgresql+asyncpg://postgres:123@localhost:5432/turkish` |
 
 ### 🌐 WebApp & Tunnel
 
