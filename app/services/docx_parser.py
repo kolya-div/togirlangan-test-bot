@@ -103,6 +103,10 @@ async def parse_docx_questions(file_path: str | Path, upload_dir: str | None = N
         """[start, end) orasidagi barcha jadvallarning pro/con larini yig'adi."""
         all_pros: list[str] = []
         all_cons: list[str] = []
+        # Hujjat oxiridagi jadval oxirgi paragrafdan KEYIN turadi (kalit =
+        # paragraflar soni) — oldin u tushib qolardi
+        if end >= len(paragraphs):
+            end = len(paragraphs) + 1
         for pos in range(start, end):
             for tbl in tables_after.get(pos, []):
                 pros, cons = _extract_table_points(tbl)

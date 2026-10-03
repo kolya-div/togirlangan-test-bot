@@ -22,20 +22,24 @@ logger = logging.getLogger(__name__)
 
 _timer: asyncio.Task | None = None
 _evaluated_since_report = 0
-# Adminlarga savol yuborilgan va hali javob berilmagan — qayta so'ramaymiz
+# Oxirgi savoldan beri baholangan testlar. Admin oldingi savolga javob
+# bermagan bo'lsa ham, yangi testlar tekshirilgach savol QAYTA yuboriladi
+# (oldin javobsiz savol keyingi barcha savollarni to'sib qo'yardi).
+_new_since_prompt = 0
 _prompt_pending = False
 
 
 def _delay() -> float:
-    return float(getattr(settings, "auto_report_delay_seconds", 180))
+    return float(getattr(settings, "auto_report_delay_seconds", 30))
 
 
 def notify_attempt_evaluated() -> None:
     """Bitta attempt AI baholashdan o'tdi — hisobot taymerini qayta boshlaydi."""
-    global _evaluated_since_report
+    global _evaluated_since_report, _new_since_prompt
     if not getattr(settings, "auto_report_enabled", True):
         return
     _evaluated_since_report += 1
+    _new_since_prompt += 1
     _restart_timer()
 
 
@@ -80,21 +84,23 @@ async def _counts() -> dict[str, int]:
 async def _all_evaluated() -> bool:
     from app.services import report_worker
 
+    # Faqat navbat (xotira) tekshiriladi. Bazadagi "processing" holati
+    # tekshirilmaydi: AI xatosi tufayli tiqilib qolgan bitta test savolni
+    # butunlay to'sib qo'yardi. Restartdan keyin bunday testlar baribir
+    # navbatga qaytariladi.
     queue = report_worker._report_queue
-    if report_worker._pending_attempts or (queue is not None and not queue.empty()):
-        return False
-    return (await _counts())["processing"] == 0
+    return not report_worker._pending_attempts and (queue is None or queue.empty())
 
 
 async def ask_admins() -> int:
     """"Javoblar tayyor. Yana testdan o'tadiganlar bormi?" [Ha] [Yo'q].
     Qaytaradi: savol yetkazilgan adminlar soni."""
-    global _prompt_pending
+    global _prompt_pending, _new_since_prompt
     from app.bot.bot import bot
     from app.bot.keyboards import auto_report_keyboard
 
-    if _evaluated_since_report == 0 or _prompt_pending:
-        return 0  # yangi natija yo'q yoki savol allaqachon kutilmoqda
+    if _evaluated_since_report == 0 or _new_since_prompt == 0:
+        return 0  # oxirgi savoldan beri yangi natija yo'q
 
     counts = await _counts()
     text = (
@@ -103,6 +109,8 @@ async def ask_admins() -> int:
     )
     if counts["active"]:
         text += f"⏳ Hali tugatmaganlar: <b>{counts['active']}</b>\n"
+    if counts["processing"]:
+        text += f"⚠️ Tekshirilmay qolganlar: <b>{counts['processing']}</b>\n"
     text += (
         "\n❓ Yana testdan o'tadiganlar bormi?\n\n"
         "«Yo'q» — natijalar (Word va Excel) hozir yuboriladi.\n"
@@ -119,6 +127,7 @@ async def ask_admins() -> int:
             logger.warning("Admin %s ga savol yuborilmadi: %s", admin_id, exc)
     if delivered:
         _prompt_pending = True
+        _new_since_prompt = 0
     return delivered
 
 
@@ -134,7 +143,7 @@ async def send_auto_report(force: bool = False) -> bool:
 
     force=True — admin «Yo'q» bosganda: yangi natija bo'lmasa ham yuboriladi.
     """
-    global _evaluated_since_report, _prompt_pending
+    global _evaluated_since_report, _prompt_pending, _new_since_prompt
     from app.services.daily_export_wipe import (
         ExportBusyError,
         _notify_admins_text,
@@ -172,6 +181,7 @@ async def send_auto_report(force: bool = False) -> bool:
 
     if sent:
         _evaluated_since_report = 0
+        _new_since_prompt = 0
         _prompt_pending = False
         logger.info("Natijalar hisoboti %s ta adminga yuborildi", sent)
     return bool(sent)
@@ -180,8 +190,9 @@ async def send_auto_report(force: bool = False) -> bool:
 def mark_reported() -> None:
     """Natijalar boshqa yo'l bilan (kunlik 00:00 hisobot) yuborildi —
     kutilayotgan avtomatik hisobot kerak emas."""
-    global _timer, _evaluated_since_report, _prompt_pending
+    global _timer, _evaluated_since_report, _prompt_pending, _new_since_prompt
     _evaluated_since_report = 0
+    _new_since_prompt = 0
     _prompt_pending = False
     if _timer is not None and not _timer.done():
         _timer.cancel()

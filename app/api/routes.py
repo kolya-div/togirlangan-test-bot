@@ -65,6 +65,22 @@ FINISH_MESSAGE = (
 )
 
 
+# Fon vazifalariga havola — GC ularni tugashidan oldin yo'q qilmasin
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _send_in_background(telegram_id: int, text: str) -> None:
+    async def _run() -> None:
+        try:
+            await _send_telegram(telegram_id, text)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Foydalanuvchiga xabar yuborib bo'lmadi (tg=%s): %s", telegram_id, e)
+
+    task = asyncio.get_running_loop().create_task(_run())
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+
+
 async def _send_telegram(telegram_id: int, text: str) -> None:
     """TelegramSender orqali xabar yuboradi — retry, 429, timeout bilan."""
     from app.services.telegram_sender import telegram_sender
@@ -681,15 +697,11 @@ async def finish_attempt(
 
     # ── Session yopildi — DB connection release ──────────────────
 
-    # Telegram xabar — DB connection ochiq emas
+    # Telegram xabar FONDA yuboriladi: Telegram sekin javob bersa (yoki
+    # ulanib bo'lmasa — timeout 60s gacha) WebApp oxirgi savolda
+    # "Yuklanmoqda..." da osilib qolmasin.
     if telegram_user_id:
-        try:
-            await _send_telegram(
-                telegram_user_id,
-                FINISH_MESSAGE,
-            )
-        except Exception as e:
-            logger.warning("Foydalanuvchiga xabar yuborib bo'lmadi (tg=%s): %s", telegram_user_id, e)
+        _send_in_background(telegram_user_id, FINISH_MESSAGE)
 
     # Navbatga qo'shish — DB connection ochiq emas
     if not await enqueue_report(attempt_id, total_answers=answers_count):

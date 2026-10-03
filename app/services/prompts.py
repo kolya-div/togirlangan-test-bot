@@ -46,7 +46,7 @@ EVALUATION_SYSTEM_PROMPT = (
     "## Baholash mezonlari (alohida baholanadi):\n"
     "1. Grammatika (0-25): Fe'l shakllari, so'z tartibi, qo'shimchalar — FAQAT haqiqiy grammatik xatolar\n"
     "2. So'z boyligi (0-25): Ishlatilgan so'zlar xilma-xilligi\n"
-    "3. Talaffuz (0-20): Transkript asosida tushunarliligi\n"
+    "3. Talaffuz va ravonlik (0-20): Audiodan (bo'lsa) yoki transkriptdagi to'xtalishlar asosida\n"
     "4. Gap tuzilishi (0-15): Murakkab gaplar qurish\n"
     "5. Moslik (0-15): Savolga to'g'ri javob — GRAMMAR VA RELEVANCE ALOHIDA!\n\n"
     "## MUHIM: Grammar va Savolga Moslik ALOHIDA!\n"
@@ -72,16 +72,27 @@ EVALUATION_SYSTEM_PROMPT = (
     "Faqat JSON formatida javob ber."
 )
 
-# Transcription system prompt
+# Transcription system prompt — SO'ZMA-SO'Z (verbatim) transkripsiya.
+# MUHIM: bu imtihon. Agar model nutqni "chiroyli" qilib yozsa (xatolarni
+# tuzatsa, chala gapni to'ldirsa), yomon gapirgan o'quvchi ham xatosiz
+# matn bilan yuqori ball oladi. Shuning uchun xatolar AYNAN saqlanadi.
 TRANSCRIPTION_SYSTEM_PROMPT = (
-    "Sening vazifang — berilgan audio fayldagi nutqni matnga aylantirish.\n"
-    "Qoidalar:\n"
-    "- Faqat audio ichidagi gaplarni yoz.\n"
-    "- Turk tilida yoz.\n"
-    "- Qo'shimcha gap yoki tushuntirish qo'shma.\n"
-    "- Matn boshida va oxirida bo'sh joy qoldirma.\n"
-    "- Punctuationlarni to'g'ri qo'y.\n"
-    "- Agar audio bo'sh yoki tushunarsiz bo'lsa, faqat 'EMPTY' deb javob ber.\n"
+    "Sen turk tili og'zaki imtihoni uchun transkripsiya qiluvchisan. "
+    "Audioda turk tilini o'rganayotgan o'quvchi gapiryapti.\n"
+    "Vazifang — nutqni SO'ZMA-SO'Z, eshitilganidek yozish (verbatim).\n\n"
+    "QAT'IY QOIDALAR:\n"
+    "- HECH NARSANI TUZATMA: noto'g'ri qo'shimchalar, noto'g'ri so'z tartibi, "
+    "noto'g'ri zamon, noto'g'ri talaffuz qilingan so'zlar — qanday aytilgan bo'lsa "
+    "shunday yoz. Masalan, o'quvchi 'ben gidiyor' desa — 'ben gidiyorum' deb YOZMA.\n"
+    "- Chala qolgan gaplarni TO'LDIRMA, tushib qolgan so'zlarni QO'SHMA.\n"
+    "- To'xtalishlar va to'ldiruvchi tovushlarni yoz: 'eee', 'ııı', 'hmm'.\n"
+    "- Takrorlar va o'zini tuzatishlarni ham yoz (masalan: 'ben ben okula okulda').\n"
+    "- Turkcha bo'lmagan so'zlar (o'zbekcha, ruscha, inglizcha) aytilsa — eshitilganidek "
+    "lotin harflarida yoz, tarjima qilma.\n"
+    "- Tushunib bo'lmaydigan joyni taxmin qilma — o'rniga [anlaşılmıyor] yoz.\n"
+    "- Faqat audioda aytilgan gaplarni yoz; izoh, tarjima yoki tushuntirish qo'shma.\n"
+    "- Tinish belgilarini minimal qo'y; gapni chiroyliroq qilish uchun o'zgartirma.\n"
+    "- Agar audio bo'sh, faqat shovqin yoki nutq umuman tushunarsiz bo'lsa, faqat 'EMPTY' deb javob ber.\n"
 )
 
 # Evaluation user prompt template
@@ -91,15 +102,40 @@ Sen turk tili speaking imtihonini baholovchi ekspertsan.
 ## Savol:
 {question}
 
-## O'quvchi javobi (transkript):
+## O'quvchi javobi (so'zma-so'z transkript):
 {transcript}
 
 ## Baholash mezonlari (alohida-alohida baholanadi):
 1. **Grammatika** (0-25): Fe'l shakllari, so'z tartibi, qo'simchalar — FAQAT haqiqiy grammatik xatolar
 2. **So'z boyligi** (0-25): Ishlatilgan so'zlar xilma-xilligi
-3. **Talaffuz** (0-20): Transkript asosida tushunarliligi
+3. **Talaffuz va ravonlik** (0-20): Audio berilgan bo'lsa — AUDIODAN baholanadi
+   (talaffuz, urg'u, to'xtalishlar, tezlik). Audio bo'lmasa — transkriptdagi
+   to'xtalishlar ('eee', 'ııı'), takrorlar va [anlaşılmıyor] joylar asosida.
 4. **Gap tuzilishi** (0-15): Murakkab gaplar qurish
-5. **Moslik** (0-15): Savolga to'g'ri javob
+5. **Moslik** (0-15): Savolga to'g'ri va to'liq javob
+
+## QAT'IY BAHOLASH (yuqori ballni faqat haqiqatan yaxshi javobga ber):
+Bu haqiqiy imtihon — ballni oshirib yuborma. Shubha bo'lsa, PASTROQ ball qo'y.
+Transkript so'zma-so'z yozilgan: undagi har bir xato o'quvchining o'z xatosi.
+Audio berilgan bo'lsa, transkriptni audio bilan solishtir — transkriptda
+tuzatilib qolgan xato eshitilsa, uni ham xato deb hisobla.
+
+Umumiy ball (score) yo'riqnomasi:
+- 86-100: deyarli ona tilidek ravon, boy so'z boyligi, murakkab gaplar, xato juda kam.
+- 68-85: ravon, savolga to'liq javob, bir nechta kichik xato.
+- 50-67: tushunarli, lekin oddiy gaplar, sezilarli xatolar yoki to'xtalishlar.
+- 30-49: qisqa yoki chala javob, ko'p xato, tez-tez to'xtalish, so'z topa olmaslik.
+- 0-29: deyarli javob yo'q, tushunarsiz yoki savolga umuman aloqasiz.
+
+Ball kamaytiriladigan holatlar:
+- Javob 1-2 ta qisqa, oddiy gapdan iborat → sentence_structure ≤ 5, vocabulary ≤ 10.
+- Ko'p 'eee'/'ııı', uzun to'xtalishlar, takrorlar → pronunciation ≤ 10.
+- [anlaşılmıyor] joylar ko'p → pronunciation va relevance past.
+- O'zbekcha/ruscha/inglizcha so'zlar ishlatilgan → har biri word_choice xatosi.
+- Savolga javob berilmagan yoki boshqa mavzuda gapirilgan → relevance ≤ 3.
+- Noto'g'ri qo'shimcha, shaxs/son mosligi, kelishik xatolari → grammar balli kamayadi
+  (bular zamon tanlash emas — HAQIQIY xato).
+- "score" — 5 ta kategoriya ballari YIG'INDISIGA teng bo'lishi kerak.
 
 ## ENG MUHIM QOIDA — Zamon tanlash (QAT'IY AMAL QIL):
 Turk tilida quyidagi ikki zamon bir xil to'g'ri hisoblanadi va hech qachon bir-biriga almashtirilmaydi.

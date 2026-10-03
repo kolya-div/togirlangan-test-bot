@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback } from 'react'
+import { useRef, useEffect, useCallback, useState } from 'react'
 import { uploadAnswer } from '../api.js'
 
 const MIN_AUDIO_BYTES = 1024
@@ -24,6 +24,21 @@ function getSupportedMimeType() {
     return ''
 }
 
+export const MIC_CONSTRAINTS = {
+    audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+        channelCount: 1,
+        sampleRate: 48000,
+    },
+}
+
+function isLive(stream) {
+    return !!stream && stream.active &&
+        stream.getAudioTracks().some(t => t.readyState === 'live')
+}
+
 function cleanupStream(stream) {
     if (stream && stream.active) {
         stream.getTracks().forEach(t => {
@@ -38,18 +53,24 @@ export default function AudioRecorder({
     initData,
     onUploaded,
     registerStop,
-    onError
+    onStopping,
+    onError,
+    // Test boshida bir marta olingan mikrofon (har savolda qayta ruxsat
+    // so'ralmaydi). U App'ga tegishli — bu komponent uni yopmaydi.
+    sharedStream,
 }) {
     const mediaRecorder = useRef(null)
     const audioChunks = useRef([])
     const streamRef = useRef(null)
     const stoppedRef = useRef(false)
     const mountedRef = useRef(false)
+    // "To'xtatish" bosildi — javob yuborilmoqda (tugma o'rniga holat ko'rsatiladi)
+    const [sending, setSending] = useState(false)
 
     const cleanup = useCallback(() => {
-        cleanupStream(streamRef.current)
+        if (streamRef.current !== sharedStream) cleanupStream(streamRef.current)
         streamRef.current = null
-    }, [])
+    }, [sharedStream])
 
     useEffect(() => {
         mountedRef.current = true
@@ -115,31 +136,26 @@ export default function AudioRecorder({
     const startRecording = useCallback(async () => {
         if (stoppedRef.current) return
 
-        let stream
-        try {
-            stream = await navigator.mediaDevices.getUserMedia({
-                audio: {
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    autoGainControl: true,
-                    channelCount: 1,
-                    sampleRate: 48000,
-                },
-            })
-        } catch (err) {
-            if (!mountedRef.current) return
-            failAndSkip('Mikrofon xatosi')
-            return
+        let stream = isLive(sharedStream) ? sharedStream : null
+        if (!stream) {
+            try {
+                stream = await navigator.mediaDevices.getUserMedia(MIC_CONSTRAINTS)
+            } catch (err) {
+                if (!mountedRef.current) return
+                failAndSkip('Mikrofon xatosi')
+                return
+            }
         }
 
         if (!mountedRef.current) {
-            cleanupStream(stream)
+            if (stream !== sharedStream) cleanupStream(stream)
             return
         }
 
         streamRef.current = stream
         const mimeType = getSupportedMimeType()
-        const options = mimeType ? { mimeType } : {}
+        // 64 kbit/s — telefon mikrofonidan aniqroq yozuv (standart ~32 kbit/s)
+        const options = mimeType ? { mimeType, audioBitsPerSecond: 64000 } : { audioBitsPerSecond: 64000 }
         let recorder
 
         try {
@@ -207,6 +223,11 @@ export default function AudioRecorder({
     const stopRecording = useCallback(() => {
         if (stoppedRef.current) return
         stoppedRef.current = true
+        // Darhol ko'rinadigan javob: yuklash sekin tarmoqda bir necha soniya
+        // davom etadi — oldin bu vaqtda ekran o'zgarmas va tugma
+        // "ishlamayapti" bo'lib ko'rinardi (ayniqsa oxirgi savolda).
+        if (mountedRef.current) setSending(true)
+        onStopping?.()
 
         const recorder = mediaRecorder.current
         if (recorder && recorder.state !== 'inactive') {
@@ -220,7 +241,7 @@ export default function AudioRecorder({
             cleanup()
             handleUploadResult({ success: true })
         }
-    }, [cleanup, handleUploadResult])
+    }, [cleanup, handleUploadResult, onStopping])
 
     useEffect(() => {
         registerStop?.(stopRecording)
@@ -232,12 +253,18 @@ export default function AudioRecorder({
                 width: 8,
                 height: 8,
                 borderRadius: '50%',
-                background: '#16A34A',
-                animation: 'pulse 1s infinite',
+                background: sending ? '#9CA3AF' : '#16A34A',
+                animation: sending ? 'none' : 'pulse 1s infinite',
             }} />
-            <button className="btn btn-danger" onClick={stopRecording}>
-                To'xtatish
-            </button>
+            {sending ? (
+                <div className="phase-status uploading" style={{ margin: 0 }}>
+                    Javob yuborilmoqda...
+                </div>
+            ) : (
+                <button className="btn btn-danger" onClick={stopRecording}>
+                    To'xtatish
+                </button>
+            )}
         </div>
     )
 }

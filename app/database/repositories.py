@@ -1,6 +1,6 @@
 import json
 
-from sqlalchemy import Date, delete, func, select
+from sqlalchemy import Date, delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -42,10 +42,39 @@ async def get_or_create_user(
             result = await session.execute(
                 select(User).where(User.telegram_id == telegram_id),
             )
-            return result.scalar_one()
+            user = result.scalar_one()
+        else:
+            await session.refresh(user)
+            return user
+
+    # ADMIN_IDS o'zgartirilsa — mavjud foydalanuvchining admin holati ham
+    # yangilanadi (oldin faqat birinchi /start da yozilardi: eski admin
+    # admin bo'lib qolar, yangisi admin bo'lmasdi)
+    should_be_admin = telegram_id in admin_ids
+    if user.is_admin != should_be_admin:
+        user.is_admin = should_be_admin
+        await session.commit()
         await session.refresh(user)
 
     return user
+
+
+async def sync_admin_flags(session: AsyncSession, admin_ids: list[int]) -> int:
+    """Bazadagi is_admin ni ADMIN_IDS ga moslaydi (ishga tushganda).
+    Qaytaradi: o'zgargan foydalanuvchilar soni."""
+    ids = list(admin_ids) or [-1]
+    granted = await session.execute(
+        update(User)
+        .where(User.telegram_id.in_(ids), User.is_admin.is_(False))
+        .values(is_admin=True)
+    )
+    revoked = await session.execute(
+        update(User)
+        .where(User.telegram_id.not_in(ids), User.is_admin.is_(True))
+        .values(is_admin=False)
+    )
+    await session.commit()
+    return (granted.rowcount or 0) + (revoked.rowcount or 0)
 
 
 async def get_user_by_telegram_id(

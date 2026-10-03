@@ -174,10 +174,6 @@ async def _report_worker(idx: int) -> None:
             await job_tracker.complete(attempt_id)
             logger.info("Ishchi #%s: attempt #%s tugadi", idx, attempt_id)
 
-            # Hammasi baholangach adminlarga avtomatik hisobot (debounce bilan)
-            from app.services.auto_report import notify_attempt_evaluated
-            notify_attempt_evaluated()
-
         except Exception as e:
             # Job status: → failed
             await job_tracker.fail(attempt_id, str(e))
@@ -187,6 +183,14 @@ async def _report_worker(idx: int) -> None:
         finally:
             _pending_attempts.discard(attempt_id)
             queue.task_done()
+
+            # Hammasi tekshirilgach adminlardan so'rash (debounce bilan).
+            # Xato bilan tugagan test ham sanaladi — aks holda savol chiqmasdi.
+            try:
+                from app.services.auto_report import notify_attempt_evaluated
+                notify_attempt_evaluated()
+            except Exception:  # noqa: BLE001
+                logger.exception("Avtomatik hisobot taymeri ishga tushmadi")
 
             # Queue bo'shaganida admin alert'ni tiklash
             global _admin_queue_alerted

@@ -398,11 +398,28 @@ async def upload_docx_handler(callback: CallbackQuery, state: FSMContext) -> Non
         text="📄 Docx faylni yuboring (oddiy parser).\n\n"
         "Fayl quyidagi formatda bo'lishi kerak:\n"
         "• Bölüm 1.1, Bölüm 1.2, Bölüm 2, Bölüm 3\n"
-        "• Har bir savolda: Tayyorlanish: XX, Javob: XX\n\n"
+        "• Har bir savolda: Tayyorlanish: XX, Javob: XX, Bal: XX\n\n"
+        "📎 Namuna fayl quyida — shu formatda tayyorlang.\n"
         "🔙 Bekor qilish uchun /cancel ni bosing.",
         reply_markup=back_button("questions"),
     )
     await callback.answer()
+    await _send_questions_template(callback.message)
+
+
+async def _send_questions_template(message: Message) -> None:
+    """Namuna Word fayl — format xatolarini kamaytiradi."""
+    from app.services.docx_template import TEMPLATE_FILENAME, build_questions_template
+
+    path = Path(settings.upload_dir).parent / "exports" / TEMPLATE_FILENAME
+    try:
+        await asyncio.to_thread(build_questions_template, path)
+        await message.answer_document(
+            FSInputFile(path, filename=TEMPLATE_FILENAME),
+            caption="📎 Namuna: savollar, vaqt va ballar shu ko'rinishda yoziladi.",
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Namuna fayl yuborilmadi: %s", exc)
 
 
 @router.callback_query(F.data == "upload_docx_ai")
