@@ -24,6 +24,21 @@ function getSupportedMimeType() {
     return ''
 }
 
+export const MIC_CONSTRAINTS = {
+    audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+        channelCount: 1,
+        sampleRate: 48000,
+    },
+}
+
+function isLive(stream) {
+    return !!stream && stream.active &&
+        stream.getAudioTracks().some(t => t.readyState === 'live')
+}
+
 function cleanupStream(stream) {
     if (stream && stream.active) {
         stream.getTracks().forEach(t => {
@@ -39,7 +54,10 @@ export default function AudioRecorder({
     onUploaded,
     registerStop,
     onStopping,
-    onError
+    onError,
+    // Test boshida bir marta olingan mikrofon (har savolda qayta ruxsat
+    // so'ralmaydi). U App'ga tegishli — bu komponent uni yopmaydi.
+    sharedStream,
 }) {
     const mediaRecorder = useRef(null)
     const audioChunks = useRef([])
@@ -50,9 +68,9 @@ export default function AudioRecorder({
     const [sending, setSending] = useState(false)
 
     const cleanup = useCallback(() => {
-        cleanupStream(streamRef.current)
+        if (streamRef.current !== sharedStream) cleanupStream(streamRef.current)
         streamRef.current = null
-    }, [])
+    }, [sharedStream])
 
     useEffect(() => {
         mountedRef.current = true
@@ -118,25 +136,19 @@ export default function AudioRecorder({
     const startRecording = useCallback(async () => {
         if (stoppedRef.current) return
 
-        let stream
-        try {
-            stream = await navigator.mediaDevices.getUserMedia({
-                audio: {
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    autoGainControl: true,
-                    channelCount: 1,
-                    sampleRate: 48000,
-                },
-            })
-        } catch (err) {
-            if (!mountedRef.current) return
-            failAndSkip('Mikrofon xatosi')
-            return
+        let stream = isLive(sharedStream) ? sharedStream : null
+        if (!stream) {
+            try {
+                stream = await navigator.mediaDevices.getUserMedia(MIC_CONSTRAINTS)
+            } catch (err) {
+                if (!mountedRef.current) return
+                failAndSkip('Mikrofon xatosi')
+                return
+            }
         }
 
         if (!mountedRef.current) {
-            cleanupStream(stream)
+            if (stream !== sharedStream) cleanupStream(stream)
             return
         }
 

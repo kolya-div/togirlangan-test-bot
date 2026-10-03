@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import QuestionCard from './components/QuestionCard.jsx'
 import Timer from './components/Timer.jsx'
-import AudioRecorder from './components/AudioRecorder.jsx'
+import AudioRecorder, { MIC_CONSTRAINTS } from './components/AudioRecorder.jsx'
 import { fetchQuestions, createAttempt, uploadAnswer, finishAttempt, initWebApp } from './api.js'
 
 function formatTime(sec) {
@@ -28,6 +28,7 @@ export default function App() {
     const [startingTest, setStartingTest] = useState(false)
     const [entryDialog, setEntryDialog] = useState(null)
     const [answerSending, setAnswerSending] = useState(false)
+    const [micError, setMicError] = useState(false)
 
     // Avtorizatsiya: user_id faqat Telegram imzosi bilan tasdiqlangan
     // initData dan (backend POST /api/init orqali) olinadi. Frontend
@@ -40,12 +41,22 @@ export default function App() {
 
     const timerRef = useRef(null)
     const stopRecorderRef = useRef(null)
+    // Test boshida bir marta olinadigan mikrofon — barcha savollarda ishlatiladi
+    const micStreamRef = useRef(null)
     const mountedRef = useRef(true)
+
+    const releaseMic = useCallback(() => {
+        micStreamRef.current?.getTracks().forEach(t => { try { t.stop() } catch (_) {} })
+        micStreamRef.current = null
+    }, [])
 
     useEffect(() => {
         mountedRef.current = true
-        return () => { mountedRef.current = false }
-    }, [])
+        return () => {
+            mountedRef.current = false
+            releaseMic()
+        }
+    }, [releaseMic])
 
     useEffect(() => {
         tg?.expand()
@@ -123,6 +134,22 @@ export default function App() {
     const startTest = async () => {
         if (startingTest) return
         setStartingTest(true)
+
+        // Mikrofon testdan OLDIN tekshiriladi: ruxsat berilmasa test
+        // boshlanmaydi (urinish behuda ketmaydi — testni qayta boshlab bo'lmaydi)
+        if (!micStreamRef.current) {
+            try {
+                micStreamRef.current = await navigator.mediaDevices.getUserMedia(MIC_CONSTRAINTS)
+            } catch (_) {
+                if (mountedRef.current) {
+                    setStartingTest(false)
+                    setMicError(true)
+                }
+                return
+            }
+        }
+        if (!mountedRef.current) return
+        setMicError(false)
 
         try {
             // start_param imzolanmagan va ishonchsiz — chat_id faqat
@@ -220,6 +247,7 @@ export default function App() {
     const finishTest = useCallback(async (attemptIdOverride = null, retryCount = 0) => {
         const aid = attemptIdOverride ?? attemptId
         clearInterval(timerRef.current)
+        releaseMic()
         setPhase('uploading')
 
         try {
@@ -243,7 +271,7 @@ export default function App() {
                 setError('Testni yakunlab bo\'lmadi. Iltimos, botga /start yozing.')
             }
         }
-    }, [attemptId, initData])
+    }, [attemptId, initData, releaseMic])
 
     const handleRecordingStop = useCallback(() => {
         moveToNextQuestion()
@@ -475,6 +503,14 @@ export default function App() {
                     )}
                 </button>
 
+                {micError && (
+                    <div className="card" style={{ marginTop: 12, textAlign: 'center', color: 'var(--danger)', fontWeight: 600 }}>
+                        🎤 Mikrofonga ruxsat berilmadi. Telegram sozlamalarida mikrofonga
+                        ruxsat bering va «Testni boshlash» ni qayta bosing.
+                        Test hali boshlanmadi.
+                    </div>
+                )}
+
                 <div className="footer">
                     <div className="footer-logo">🎓</div>
                     <div className="footer-name">Step Academy</div>
@@ -544,6 +580,7 @@ export default function App() {
                         registerStop={(fn) => { stopRecorderRef.current = fn }}
                         onStopping={handleRecordingStopping}
                         onError={handleRecordingError}
+                        sharedStream={micStreamRef.current}
                     />
                 </>
             )}
