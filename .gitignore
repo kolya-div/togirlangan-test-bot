@@ -64,7 +64,9 @@ logs/
 # Node.js
 node_modules/
 dist/
-webapp/dist/
+# webapp/dist repozitoriyda saqlanadi — Node.js (npm) o'rnatilmagan
+# kompyuterda ham WebApp ishlashi uchun
+!webapp/dist/
 webapp/.vite/
 
 # Cache
